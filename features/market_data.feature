@@ -97,6 +97,49 @@ Feature: Market Data Queries
     Then Aya falls back to CoinGecko
     And the source is attributed as CoinGecko
 
+  # --- CoinGecko Pro / Free Failover ---
+
+  @phase1 @fast
+  Scenario: CoinGecko Pro as primary source
+    Given CoinGecko Pro API key is configured
+    And CoinGecko Pro is available
+    When the user asks "What's the price of BTC?"
+    Then data is fetched from CoinGecko Pro (pro-api.coingecko.com)
+    And the source is attributed
+
+  @phase1 @fast
+  Scenario: Fallback to CoinGecko Free when Pro fails
+    Given CoinGecko Pro API key is configured
+    But CoinGecko Pro returns HTTP 429 (rate limited)
+    When the user asks "What's the price of BTC?"
+    Then data is fetched from CoinGecko Free (api.coingecko.com)
+    And the source attribution mentions free tier
+
+  @phase1 @fast
+  Scenario: Fallback to CoinGecko Free when Pro key is missing
+    Given no CoinGecko Pro API key is configured
+    When the user asks "What's the price of BTC?"
+    Then data is fetched from CoinGecko Free
+    And no Pro API call is attempted
+
+  @phase1 @fast
+  Scenario: Both CoinGecko tiers down
+    Given CoinGecko Pro is returning errors
+    And CoinGecko Free is also returning errors
+    When the user asks "What's the price of BTC?"
+    Then Aya returns a MARKET_DATA_ERROR
+    And the message explains market data is temporarily unavailable
+
+  @phase1 @fast
+  Scenario: CoinGecko Pro circuit breaker
+    Given CoinGecko Pro has failed 5 consecutive times in the last minute
+    When the user asks for a price
+    Then CoinGecko Pro is skipped (circuit breaker open)
+    And CoinGecko Free is used directly
+    And latency is not wasted on the known-down Pro endpoint
+
+  # --- Caching ---
+
   @phase1 @fast
   Scenario: Market data caching within TTL
     Given the user asked "What's the price of BTC?" 10 seconds ago

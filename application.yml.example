@@ -1,0 +1,122 @@
+# Aya Backend — Example Configuration
+#
+# Copy to application.yml and fill in your values.
+# Secrets should be passed via CLI args or env vars, not committed to YAML.
+#
+# Precedence: CLI args > env vars > application.yml
+
+server:
+  port: 8080
+  requestTimeoutMs: 30000
+  maxPayloadBytes: 1048576
+
+redis:
+  url: redis://localhost:6379
+  poolSize: 16
+
+sqlite:
+  path: ./aya.db
+
+# --- LLM Providers ---
+# At least one fast + one powerful provider must be configured.
+llm:
+  providers:
+    - name: anthropic
+      tier: fast
+      apiKey: ${ANTHROPIC_API_KEY}       # pass via env or --llm.providers.0.apiKey=...
+      baseUrl: https://api.anthropic.com
+      model: claude-haiku-4-5-20251001
+      timeoutMs: 5000
+    - name: openai
+      tier: powerful
+      apiKey: ${OPENAI_API_KEY}          # pass via env or --llm.providers.1.apiKey=...
+      baseUrl: https://api.openai.com
+      model: gpt-4o
+      timeoutMs: 10000
+  circuitBreaker:
+    failureThreshold: 5
+    cooldownMs: 30000
+
+# --- Market Data ---
+coingecko:
+  pro:
+    enabled: true
+    apiKey: ${COINGECKO_PRO_API_KEY}     # CoinGecko Pro key — pass via env or CLI
+    baseUrl: https://pro-api.coingecko.com/api/v3
+    timeoutMs: 5000
+    rateLimitPerMinute: 500
+  free:
+    enabled: true                        # Fallback when Pro fails
+    baseUrl: https://api.coingecko.com/api/v3
+    timeoutMs: 5000
+    rateLimitPerMinute: 30
+
+defillama:
+  baseUrl: https://api.llama.fi
+  timeoutMs: 5000
+
+# --- Aya Trade (Phase 2+) ---
+ayaTrade:
+  enabled: false
+  baseUrl: ${AYA_TRADE_API_URL}
+  timeoutMs: 5000
+
+# --- Blockchain RPCs ---
+rpc:
+  ethereum:
+    url: ${ETH_RPC_URL}
+    timeoutMs: 10000
+  polygon:
+    url: ${POLYGON_RPC_URL}
+    timeoutMs: 10000
+  arbitrum:
+    url: ${ARBITRUM_RPC_URL}
+    timeoutMs: 10000
+  optimism:
+    url: ${OPTIMISM_RPC_URL}
+    timeoutMs: 10000
+  base:
+    url: ${BASE_RPC_URL}
+    timeoutMs: 10000
+  bsc:
+    url: ${BSC_RPC_URL}
+    timeoutMs: 10000
+  avalanche:
+    url: ${AVALANCHE_RPC_URL}
+    timeoutMs: 10000
+  solana:
+    url: ${SOLANA_RPC_URL}
+    timeoutMs: 10000
+  bitcoin:
+    mempoolUrl: https://mempool.space/api
+    timeoutMs: 10000
+
+# --- Block Explorers ---
+explorers:
+  etherscan:
+    apiKey: ${ETHERSCAN_API_KEY}
+  polygonscan:
+    apiKey: ${POLYGONSCAN_API_KEY}
+  arbiscan:
+    apiKey: ${ARBISCAN_API_KEY}
+
+# --- Security ---
+security:
+  rateLimit:
+    authenticatedPerMinute: 30
+    unauthenticatedPerMinute: 5
+    globalPerMinute: 10000
+  timestampToleranceMs: 300000
+
+# --- Caching ---
+cache:
+  priceTtlSeconds: 30
+  marketOverviewTtlSeconds: 60
+  tvlTtlSeconds: 300
+  newsTtlSeconds: 300
+  tokenInfoTtlSeconds: 3600
+  abiTtlSeconds: 86400
+
+# --- Logging ---
+logging:
+  level: INFO

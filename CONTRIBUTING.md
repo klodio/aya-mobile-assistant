@@ -105,21 +105,38 @@ llm:
   providers:
     - name: anthropic
       tier: fast
-      apiKey: ${LLM_ANTHROPIC_API_KEY}
+      apiKey: ${ANTHROPIC_API_KEY}
     - name: openai
       tier: powerful
-      apiKey: ${LLM_OPENAI_API_KEY}
+      apiKey: ${OPENAI_API_KEY}
+
+coingecko:
+  pro:
+    enabled: true
+    apiKey: ${COINGECKO_PRO_API_KEY}
+    baseUrl: https://pro-api.coingecko.com/api/v3
+  free:
+    enabled: true
+    baseUrl: https://api.coingecko.com/api/v3
 
 rpc:
-  ethereum: ${ETH_RPC_URL}
-  polygon: ${POLYGON_RPC_URL}
-  solana: ${SOLANA_RPC_URL}
+  ethereum:
+    url: ${ETH_RPC_URL}
+  polygon:
+    url: ${POLYGON_RPC_URL}
+  solana:
+    url: ${SOLANA_RPC_URL}
 
 sqlite:
   path: ./aya.db
 ```
 
-Environment variable substitution (`${VAR}`) is supported in YAML values. Secrets (API keys) should always come from environment variables, never hardcoded in YAML.
+Every setting can be overridden via:
+1. **CLI args**: `--coingecko.pro.apiKey=CG-xxx` (highest precedence)
+2. **Env vars**: `COINGECKO_PRO_API_KEY=CG-xxx`
+3. **YAML file**: lowest precedence, for non-secret defaults
+
+Environment variable substitution (`${VAR}`) is supported in YAML values. Secrets (API keys) should always come from environment variables or CLI args, never hardcoded in YAML. See [application.yml.example](application.yml.example) for the full reference.
 
 ## 7. Architecture Decision Records (ADRs)
 

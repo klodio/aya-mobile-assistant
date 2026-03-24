@@ -189,11 +189,168 @@ A concrete example: the user sends **"Swap 100 USDC for ETH on Polygon"**.
 
 - Single fat JAR produced by Gradle Shadow plugin (or Spring Boot's bootJar)
 - Run: `java -jar aya-backend.jar`
-- Prerequisites: JDK 21+, Redis instance (connection URL via environment variable)
-- Configuration: `application.yml` or environment variables for LLM API keys, RPC URLs, Redis URL, port, etc.
+- Prerequisites: JDK 21+, Redis instance
 - SQLite database file created automatically on first run
 - Horizontal scaling: multiple instances share Redis for session state; SQLite is per-instance (ABI cache is read-heavy and duplicated safely)
 - Health endpoint: `GET /health` returns 200 with basic status
+
+### 2.6 Configuration
+
+All configuration uses **SnakeYAML**. Every setting can be provided in three ways, in order of precedence:
+
+1. **Command-line arguments**: `--server.port=9090`, `--coingecko.pro.apiKey=CG-xxx` — highest priority, used for secrets in CI/deployment
+2. **Environment variables**: `SERVER_PORT=9090`, `COINGECKO_PRO_API_KEY=CG-xxx` — standard for container-less deployments and managed secrets
+3. **`application.yml`** file in the working directory — lowest priority, used for non-secret defaults
+
+Nested YAML keys map to dot-separated CLI args and underscore-separated env vars:
+- `coingecko.pro.apiKey` → `--coingecko.pro.apiKey` → `COINGECKO_PRO_API_KEY`
+
+#### Full Configuration Reference
+
+```yaml
+# application.yml — reference configuration with all settings
+
+server:
+  port: 8080                          # HTTP listen port
+  requestTimeoutMs: 30000             # Max request processing time
+  maxPayloadBytes: 1048576            # Max request body size (1 MB)
+
+redis:
+  url: redis://localhost:6379         # Redis connection URL
+  poolSize: 16                        # Connection pool size
+
+sqlite:
+  path: ./aya.db                      # SQLite database file path
+
+# --- LLM Providers ---
+llm:
+  providers:
+    - name: anthropic
+      tier: fast                      # fast or powerful
+      apiKey: ${ANTHROPIC_API_KEY}    # env var substitution for secrets
+      baseUrl: https://api.anthropic.com
+      model: claude-haiku-4-5-20251001
+      timeoutMs: 5000
+    - name: openai
+      tier: powerful
+      apiKey: ${OPENAI_API_KEY}
+      baseUrl: https://api.openai.com
+      model: gpt-4o
+      timeoutMs: 10000
+  circuitBreaker:
+    failureThreshold: 5               # consecutive failures to trip
+    cooldownMs: 30000                  # time before re-enabling
+
+# --- Market Data ---
+coingecko:
+  pro:
+    enabled: true                     # Use paid API as primary
+    apiKey: ${COINGECKO_PRO_API_KEY}  # CoinGecko Pro API key
+    baseUrl: https://pro-api.coingecko.com/api/v3
+    timeoutMs: 5000
+    rateLimitPerMinute: 500           # Pro plan limit
+  free:
+    enabled: true                     # Free tier as fallback
+    baseUrl: https://api.coingecko.com/api/v3
+    timeoutMs: 5000
+    rateLimitPerMinute: 30            # Free tier limit
+
+defillama:
+  baseUrl: https://api.llama.fi
+  timeoutMs: 5000
+
+# --- Aya Trade (Phase 2+) ---
+ayaTrade:
+  enabled: false                      # Set to true when API is available
+  baseUrl: ${AYA_TRADE_API_URL}
+  timeoutMs: 5000
+
+# --- Blockchain RPCs ---
+rpc:
+  ethereum:
+    url: ${ETH_RPC_URL}
+    timeoutMs: 10000
+  polygon:
+    url: ${POLYGON_RPC_URL}
+    timeoutMs: 10000
+  arbitrum:
+    url: ${ARBITRUM_RPC_URL}
+    timeoutMs: 10000
+  optimism:
+    url: ${OPTIMISM_RPC_URL}
+    timeoutMs: 10000
+  base:
+    url: ${BASE_RPC_URL}
+    timeoutMs: 10000
+  bsc:
+    url: ${BSC_RPC_URL}
+    timeoutMs: 10000
+  avalanche:
+    url: ${AVALANCHE_RPC_URL}
+    timeoutMs: 10000
+  solana:
+    url: ${SOLANA_RPC_URL}
+    timeoutMs: 10000
+  bitcoin:
+    mempoolUrl: https://mempool.space/api   # Fee estimation
+    timeoutMs: 10000
+
+# --- Block Explorers (ABI fetching) ---
+explorers:
+  etherscan:
+    apiKey: ${ETHERSCAN_API_KEY}
+  polygonscan:
+    apiKey: ${POLYGONSCAN_API_KEY}
+  arbiscan:
+    apiKey: ${ARBISCAN_API_KEY}
+  # ... same pattern for other explorers
+
+# --- Security ---
+security:
+  rateLimit:
+    authenticatedPerMinute: 30
+    unauthenticatedPerMinute: 5
+    globalPerMinute: 10000
+  timestampToleranceMs: 300000        # ±5 minutes
+
+# --- Caching ---
+cache:
+  priceTtlSeconds: 30
+  marketOverviewTtlSeconds: 60
+  tvlTtlSeconds: 300
+  newsTtlSeconds: 300
+  tokenInfoTtlSeconds: 3600
+  abiTtlSeconds: 86400
+
+# --- Logging ---
+logging:
+  level: INFO                         # DEBUG, INFO, WARN, ERROR
+```
+
+#### Running with CLI Arguments (Secrets)
+
+```bash
+java -jar aya-backend.jar \
+  --coingecko.pro.apiKey=CG-xxxxxxxxxxxx \
+  --llm.providers.0.apiKey=sk-ant-xxxxx \
+  --llm.providers.1.apiKey=sk-xxxxx \
+  --rpc.ethereum.url=https://eth-mainnet.g.alchemy.com/v2/xxx \
+  --redis.url=redis://redis.internal:6379
+```
+
+#### Running with Environment Variables (Secrets)
+
+```bash
+export COINGECKO_PRO_API_KEY=CG-xxxxxxxxxxxx
+export ANTHROPIC_API_KEY=sk-ant-xxxxx
+export OPENAI_API_KEY=sk-xxxxx
+export ETH_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/xxx
+export REDIS_URL=redis://redis.internal:6379
+
+java -jar aya-backend.jar
+```
+
+Both approaches can be combined: non-secret defaults in `application.yml`, secrets via CLI args or env vars.
 
 ---
 
@@ -1275,21 +1432,27 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 
 **GetPriceTool**
 - Parameters: `symbol` (required), `chainId` (optional), `currency` (optional, default USD)
-- Sources: CoinGecko (Phase 1), Aya Trade market data (when available, preferred)
+- **Primary source**: CoinGecko Pro (paid API, `pro-api.coingecko.com`). Requires API key.
+- **Fallback source**: CoinGecko free tier (`api.coingecko.com`). Used automatically when Pro is unavailable (rate limit, downtime, invalid key).
+- **Future primary**: Aya Trade market data (when available, takes priority over both CoinGecko tiers).
+- Source priority: Aya Trade (when available) > CoinGecko Pro > CoinGecko Free
 - Cache: 30 seconds
 - Returns: price, 24h change, market cap, volume
+- Response always attributes which source was used
 
 **GetMarketOverviewTool**
 - Parameters: `limit` (default 10), `sortBy` (marketCap, volume, change24h), `direction` (asc, desc)
+- Sources: same priority as GetPriceTool (CoinGecko Pro > Free)
 - Returns: list of top assets with basic metrics
 
 **GetTokenInfoTool**
 - Parameters: `symbol` or `contractAddress` + `chainId`
+- Sources: CoinGecko Pro > Free
 - Returns: full token details (name, symbol, decimals, chains, contract addresses, description)
 
 **GetTvlTool**
 - Parameters: `protocol` (required)
-- Source: DeFiLlama
+- Source: DeFiLlama (no paid/free distinction)
 - Cache: 5 minutes
 - Returns: total TVL, TVL by chain, change over time
 
@@ -1298,6 +1461,20 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 - Source: Crypto news aggregator API
 - Cache: 5 minutes
 - Returns: list of headlines with summaries and links
+
+#### CoinGecko Failover Behavior
+
+```
+1. Try CoinGecko Pro (pro-api.coingecko.com) with API key
+2. If Pro fails (HTTP 429, 5xx, timeout, or no API key configured):
+   a. Log the failure reason
+   b. Fall back to CoinGecko Free (api.coingecko.com)
+   c. Attribute source as "CoinGecko (free)" in the response
+3. If Free also fails:
+   a. Return MARKET_DATA_ERROR
+4. Circuit breaker: If Pro fails 5 times in 1 minute, skip Pro for 30 seconds
+   and go directly to Free (avoids wasting latency on a known-down endpoint)
+```
 
 ### 8.3 Portfolio Analysis Tools
 
