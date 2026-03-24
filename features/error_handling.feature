@@ -149,9 +149,9 @@ Feature: Error Handling
   Scenario: Tool execution timeout
     Given a tool execution exceeds its configured timeout (e.g., 10 seconds)
     When the timeout triggers
-    Then Aya returns a partial result if available
-    Or returns an error explaining the operation took too long
+    Then Aya returns an error explaining the operation took too long
     And suggests trying again
+    And does not hang indefinitely
 
   @phase1 @fast
   Scenario: Overall request timeout

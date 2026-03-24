@@ -66,7 +66,7 @@ The backend does **not**:
 | **Client-Side Execution** | The mobile app executes a pre-built function locally (Phase 1 model). The backend returns an action descriptor. |
 | **Server-Generated Transaction** | The backend constructs unsigned transaction(s) that the mobile presents for the user to sign with their key (Phase 2+ model). |
 | **Aya Trade** | The team's own decentralized exchange supporting spot, perps, crypto, and commodities. Priority trading venue. |
-| **Tier 1 / Fast Model** | A fast, low-latency LLM used for intent classification, simple queries, and routing. |
+| **Tier 1 / Fast Model** | A fast, low-latency LLM used for simple queries, tool-calling orchestration, and most conversations. |
 | **Tier 2 / Powerful Model** | A high-capability LLM used for complex reasoning, trading strategies, and multi-step planning. |
 | **Fat JAR** | A single self-contained JAR file that includes all dependencies, runnable with `java -jar`. |
 
@@ -137,7 +137,7 @@ The backend does **not**:
 |--------|---------|-----------------|
 | `aya-protocol` | SBE XML schemas and generated Java/TypeScript codecs | SBE Tool |
 | `aya-server` | HTTP server, SBE encode/decode, request routing, rate limiting | `aya-protocol`, `aya-security` |
-| `aya-agent` | Agent pipeline: intent classification, model routing, tool dispatch, response assembly | `aya-tools`, `aya-txbuilder`, `aya-protocol` |
+| `aya-agent` | Agent pipeline: LLM orchestration, model tier routing, tool execution, response encoding | `aya-tools`, `aya-txbuilder`, `aya-protocol` |
 | `aya-tools` | Tool implementations: market data, portfolio, news, settings, trading strategy | External APIs |
 | `aya-txbuilder` | ABI/IDL registries, protocol adapters, transaction construction pipeline | Chain RPCs, `aya-protocol` |
 | `aya-exchange` | Aya Trade exchange API client and integration logic | Aya Trade API |
@@ -187,7 +187,8 @@ A concrete example: the user sends **"Swap 100 USDC for ETH on Polygon"**.
 
 ### 2.5 Deployment Model
 
-- Single fat JAR produced by Gradle Shadow plugin (or Spring Boot's bootJar)
+- HTTP server: **Netty** (raw) — maximum performance and control, no framework overhead
+- Single fat JAR produced by Gradle Shadow plugin
 - Run: `java -jar aya-backend.jar`
 - Prerequisites: JDK 21+, Redis instance
 - SQLite database file created automatically on first run
@@ -311,7 +312,15 @@ security:
     authenticatedPerMinute: 30
     unauthenticatedPerMinute: 5
     globalPerMinute: 10000
+    retryAfterMs: 5000                # Retry-After value returned on rate limit
   timestampToleranceMs: 300000        # ±5 minutes
+
+# --- Session ---
+session:
+  expiryMs: 86400000                  # 24 hours (configurable)
+  maxTurnsBeforeSummary: 20           # Summarize older turns after this count
+  keepRecentTurns: 10                 # Keep this many recent turns verbatim
+  contextBudgetPercent: 40            # Reserve this % of context window for response
 
 # --- Caching ---
 cache:
@@ -321,6 +330,12 @@ cache:
   newsTtlSeconds: 300
   tokenInfoTtlSeconds: 3600
   abiTtlSeconds: 86400
+  abiLruCapacity: 10000               # In-memory LRU cache size for parsed ABIs
+
+# --- HTTP Client ---
+httpClient:
+  connectionPoolPerHost: 10
+  keepAlive: true
 
 # --- Logging ---
 logging:
@@ -398,15 +413,20 @@ The outer wrapper for all client-to-server messages.
 
 **AssistantResponse** (templateId=2)
 
-The outer wrapper for all server-to-client messages.
+The outer wrapper for all server-to-client messages. Every response carries a text field (the assistant's conversational reply) and optionally a structured payload.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `schemaVersion` | `uint16` | Schema version used for this response |
 | `requestId` | `uint64` | Echoed from the request for correlation |
 | `timestamp` | `uint64` | Server-side epoch milliseconds |
-| `responseType` | `ResponseType` enum | The type of inner response |
-| `payload` | `var-data (bytes)` | SBE-encoded inner response message |
+| `responseType` | `ResponseType` enum | The type of inner structured payload (TEXT if no structured payload) |
+| `text` | `var-data (utf8)` | The assistant's conversational text (always present) |
+| `hasDisclaimer` | `BooleanType` enum | Whether the response includes a financial disclaimer |
+| `disclaimerText` | `var-data (utf8)` | The disclaimer text (empty if hasDisclaimer is FALSE) |
+| `payload` | `var-data (bytes)` | SBE-encoded structured payload (empty if responseType is TEXT) |
+
+This design solves the compound response problem: every response has text, and optionally a structured payload (TransactionBundle, MarketDataResponse, SettingsChangeRequest, etc.). The mobile renders the text conversationally and the structured payload as a rich UI card.
 
 ```xml
 <!-- Representative SBE XML for AssistantRequest -->
@@ -441,6 +461,16 @@ Portfolio entry group fields:
 | `contractAddress` | `var-data (utf8)` | Token contract address (empty for native) |
 | `balance` | `var-data (utf8)` | Decimal balance as string (to avoid floating point issues) |
 
+Bitcoin UTXO group (nested within portfolioEntries when chainId is BITCOIN):
+| Field | Type | Description |
+|-------|------|-------------|
+| `txHash` | `var-data (utf8)` | Transaction hash of the UTXO |
+| `outputIndex` | `uint32` | Output index within the transaction |
+| `scriptPubKey` | `var-data (utf8)` | Hex-encoded script pubkey |
+| `valueSats` | `uint64` | Value in satoshis |
+
+For Bitcoin entries, the `balance` field in the parent group is the total BTC balance (for display), while the `utxos` group provides the individual UTXOs needed for PSBT construction.
+
 ```xml
 <sbe:message name="UserMessage" id="10" description="User's conversational message with portfolio metadata">
     <data name="text" id="1" type="varStringEncoding"/>
@@ -465,11 +495,15 @@ Portfolio entry group fields:
 
 **ConversationMeta** (templateId=12)
 
+Sent as part of an `AssistantResponse` with `responseType=TEXT` when the client requests session info (e.g., via a `/session` command in the CLI). Also useful for debugging and testing.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `sessionId` | `char[36]` | Session identifier |
 | `turnCount` | `uint32` | Number of turns in this conversation |
 | `contextSummary` | `var-data (utf8)` | LLM-generated summary of conversation context |
+
+Note: `ConversationMeta` is metadata attached to responses for debugging/testing, not a primary response type. It does not have its own `ResponseType` enum value — it is encoded alongside `AssistantTextResponse` when requested.
 
 #### 3.3.3 Action Messages (Client-Side Execution)
 
@@ -599,6 +633,7 @@ Client sends this to report the outcome of a signed/broadcast transaction.
 | `errorCategory` | `ErrorCategory` enum | High-level error classification |
 | `message` | `var-data (utf8)` | User-friendly error message |
 | `retryable` | `BooleanType` enum | Whether the client should retry |
+| `retryAfterMs` | `uint32` | Milliseconds to wait before retrying (0 if not applicable) |
 
 #### 3.3.8 Streaming Messages (Phase 2)
 
@@ -652,7 +687,7 @@ Behavior:
     <validValue name="EXCHANGE_ORDER">10</validValue>
 </enum>
 
-<enum name="ChainId" encodingType="uint16">
+<enum name="ChainId" encodingType="uint32">
     <validValue name="ETHEREUM">1</validValue>
     <validValue name="POLYGON">137</validValue>
     <validValue name="ARBITRUM">42161</validValue>
@@ -870,6 +905,8 @@ The LLM receives tool definitions and decides which to call. Available tools:
 | `search_protocols` | Query the protocol registry by category, chain, asset, action | User asks what protocols are available, or LLM needs to find where to execute |
 | `get_best_yield` | Find highest yield for an asset across chains and protocols | User asks "where is the best yield for my ETH?" |
 | `get_protocol_info` | Get details about a specific protocol on a chain | User asks about a protocol, or LLM needs contract addresses |
+| `check_balance` | Check a specific asset balance | LLM needs to verify user has enough before building a transaction |
+| `generate_strategy` | Produce a structured trading strategy | User asks for portfolio advice or strategy (always Tier 2) |
 | `build_transaction` | Construct unsigned transaction(s) | User confirms they want to execute a trade/stake/bridge |
 | `build_client_action` | Construct a client-side action (Phase 1) | User confirms an action handled by the mobile app |
 | `change_setting` | Construct a settings change request | User wants to change an app setting |
@@ -1019,7 +1056,7 @@ Differences between EVM chains are limited to:
 - Gas token symbol and decimals
 - Known protocol contract addresses
 
-**Transaction building**: Uses web3j for ABI encoding, RPC calls (`eth_call`, `eth_estimateGas`, `eth_getTransactionCount`).
+**Libraries**: web3j for ABI encoding and RPC calls (`eth_call`, `eth_estimateGas`, `eth_getTransactionCount`).
 
 **Supported EVM chains at launch**:
 | Chain | Chain ID | Gas Token |
@@ -1054,8 +1091,10 @@ Key differences from EVM and Solana:
 - **Limited smart contracts**: No general-purpose DeFi interactions; primarily send/receive
 - **Client provides UTXOs**: The mobile app must send available UTXOs as part of the portfolio metadata
 
+**Library**: **bitcoinj** for PSBT construction, UTXO management, and script handling.
+
 **Transaction building**:
-1. Parse client-provided UTXOs
+1. Parse client-provided UTXOs from the `UserMessage` portfolio group (see UTXO fields in Section 3.3.2)
 2. Select inputs using a coin selection algorithm (branch-and-bound, fallback to knapsack)
 3. Construct PSBT with inputs, outputs (destination + change), and metadata
 4. Estimate fee using mempool.space API fee rates with safety margin
@@ -1227,7 +1266,7 @@ CREATE TABLE abi_registry (
 | Optimism | api-optimistic.etherscan.io |
 | Base | api.basescan.org |
 | BSC | api.bscscan.com |
-| Avalanche | api.snowtrace.io |
+| Avalanche | api.snowscan.xyz |
 
 **Cache strategy**:
 - **In-memory LRU**: Parsed `ContractAbi` objects. Capacity: 10,000 entries. TTL: 24 hours.
@@ -1350,7 +1389,7 @@ Bitcoin transactions use the PSBT standard (BIP-174):
 
 ### 7.7 Protocol Adapter Layer
 
-#### 7.5.1 Adapter Interface
+#### 7.7.1 Adapter Interface
 
 ```java
 public interface ProtocolAdapter {
@@ -1377,7 +1416,7 @@ public interface ProtocolAdapter {
 }
 ```
 
-#### 7.5.2 EVM Protocol Adapters
+#### 7.7.2 EVM Protocol Adapters
 
 | Adapter | Protocol | Supported Actions | Key Contracts |
 |---------|----------|-------------------|---------------|
@@ -1402,7 +1441,7 @@ For a swap of 100 USDC → ETH on Polygon:
 2. Build `exactInputSingle(tokenIn=USDC, tokenOut=WETH, fee=3000, recipient=user, amountIn=100e6, amountOutMinimum=quotedAmount*(1-slippage), sqrtPriceLimitX96=0)` tx
 3. Return [approve_tx, swap_tx] or [swap_tx]
 
-#### 7.5.3 Solana Protocol Adapters
+#### 7.7.3 Solana Protocol Adapters
 
 | Adapter | Protocol | Supported Actions | Key Programs |
 |---------|----------|-------------------|-------------|
@@ -1416,7 +1455,7 @@ Each Solana adapter:
 - Constructs instructions using Anchor IDL-driven instruction builders
 - Handles account resolution (token accounts, ATAs, PDAs)
 
-#### 7.5.4 Adding New Protocol Adapters
+#### 7.7.4 Adding New Protocol Adapters
 
 1. Implement `ProtocolAdapter` interface
 2. Register in `ProtocolAdapterRegistry`:
@@ -1429,7 +1468,7 @@ Each Solana adapter:
 
 ### 7.8 Transaction Construction Pipeline
 
-#### 7.6.1 Intent to Protocol Selection
+#### 7.8.1 Intent to Protocol Selection
 
 The pipeline resolves which protocol to use:
 
@@ -1441,7 +1480,7 @@ The pipeline resolves which protocol to use:
    - APY (for staking)
    - Protocol reputation/TVL
 
-#### 7.6.2 Parameter Resolution
+#### 7.8.2 Parameter Resolution
 
 For a trade:
 1. **Resolve token addresses**: Map symbol + chain → contract address using the token registry (SQLite). If ambiguous, the LLM asks the user to clarify through natural conversation (no special message type needed).
@@ -1450,7 +1489,7 @@ For a trade:
 4. **Quote**: For swaps, call the protocol's quoter (e.g., Uniswap QuoterV2) to get expected output.
 5. **Slippage**: Apply configurable slippage tolerance (default 0.5%, user-configurable via settings).
 
-#### 7.6.3 Transaction Building
+#### 7.8.3 Transaction Building
 
 Delegate to the selected `ProtocolAdapter.buildTransactions()`. The adapter returns a list of `UnsignedTransaction` objects:
 
@@ -1465,7 +1504,7 @@ public record UnsignedTransaction(
 ) {}
 ```
 
-#### 7.6.4 Simulation / Dry-Run
+#### 7.8.4 Simulation / Dry-Run
 
 **EVM**: `eth_call` with the transaction parameters against the current block. If the call reverts, parse the revert reason (Solidity custom errors, require strings) and report to the user.
 
@@ -1478,7 +1517,7 @@ If simulation fails:
 - Report the failure reason in natural language
 - Suggest alternatives (different protocol, different amount, check balance)
 
-#### 7.6.5 Gas/Fee Estimation
+#### 7.8.5 Gas/Fee Estimation
 
 **EVM**:
 1. `eth_estimateGas` for each transaction
@@ -1495,7 +1534,7 @@ If simulation fails:
 2. Fee = `txVirtualSize * feeRate`
 3. Apply 10% safety margin
 
-#### 7.6.6 Serialization for Client Signing
+#### 7.8.6 Serialization for Client Signing
 
 Package the transaction(s) into a `TransactionBundle` SBE message:
 - Each transaction: `sequence`, `to`, `data` (hex-encoded calldata or base64 PSBT), `value`, `gasLimit`, `description`
@@ -1585,7 +1624,7 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 
 **GetNewsTool**
 - Parameters: `topic` (optional), `symbol` (optional), `limit` (default 5)
-- Source: Crypto news aggregator API
+- Source: **CoinGecko Pro API** news/status endpoints (reuses the existing CoinGecko integration — no separate news API needed)
 - Cache: 5 minutes
 - Returns: list of headlines with summaries and links
 
@@ -1623,11 +1662,30 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 - Validation: checks that value is in allowed range (e.g., slippage 0.01-50%)
 - Returns: `SettingsChangeRequest` SBE message
 
-### 8.5 Trading Strategies
+### 8.5 Trading Strategy Tool
 
-Trading strategies are NOT a tool — they are generated directly by the LLM. The LLM uses `get_price`, `get_market_overview`, and `analyze_portfolio` to gather data, then synthesizes a strategy using its own reasoning. This is why strategy requests route to Tier 2 (powerful model): the LLM itself does the analysis.
+**GenerateStrategyTool** (`generate_strategy`)
+- Parameters: `query` (user's question), `portfolioSummary` (from AnalyzePortfolioTool), `marketContext` (from GetPriceTool/GetMarketOverviewTool)
+- Always triggered via Tier 2 (powerful) model — the LLM gathers data from other tools first, then calls this tool with the context
+- Returns: `TradingStrategyResponse` SBE message with `strategyText`, `confidence` (LOW/MEDIUM/HIGH), `disclaimer`, and `suggestedActions` repeating group
+- The mobile renders this as a structured strategy card with confidence badge and actionable step buttons
 
-The system prompt instructs the LLM to structure strategy responses with confidence levels, actionable steps, and mandatory disclaimers.
+### 8.6 Transaction & Action Tools
+
+**BuildTransactionTool** (`build_transaction`)
+- Parameters: `action` (SWAP, STAKE, UNSTAKE, BRIDGE, LEND, BORROW, TRANSFER), `fromAsset` (symbol), `toAsset` (symbol, optional), `amount` (decimal string), `chainId`, `protocol` (optional — if omitted, best protocol is selected), `slippage` (optional, default 0.5%)
+- Returns: `TransactionBundle` SBE message with unsigned transaction(s)
+- Internally calls the Transaction Construction Pipeline (Section 7.8)
+
+**BuildClientActionTool** (`build_client_action`) — Phase 1 only
+- Parameters: `actionType` (SWAP, BRIDGE, SETTINGS_CHANGE), `parameters` (key-value map matching the mobile's expected parameters)
+- Returns: `ClientActionRequest` SBE message
+- Used when the mobile app has a built-in function for the action
+
+**CheckAyaTradeTool** (`check_aya_trade`)
+- Parameters: `baseAsset` (symbol), `quoteAsset` (symbol)
+- Returns: `{ available: boolean, pair: string, bestBid: string, bestAsk: string, spread: string }` — included in the LLM's context so it can recommend Aya Trade
+- The system prompt instructs the LLM to call this before any trade to check Aya Trade availability
 
 ### 8.6 Tool Result Caching
 
@@ -1753,13 +1811,15 @@ Every request is authenticated:
 
 1. Client signs the request body (SBE payload, excluding the signature field) with their private key
 2. Server verifies the signature against the `publicKey` field in the request
-3. Signature algorithm: ECDSA over secp256k1 (same curve used by Ethereum and Bitcoin)
+3. Signature algorithm: **ECDSA over secp256k1** (same curve used by Ethereum and Bitcoin)
 4. Invalid or missing signature → `ErrorResponse` with `errorCategory=AUTH`
 
 This proves:
 - The request came from the holder of the corresponding private key
 - The payload was not tampered with in transit
 - Identity = public key (no need for user accounts)
+
+**Multi-chain note**: All users authenticate with secp256k1 regardless of which chain they primarily use. Solana users (whose on-chain key is Ed25519) have the wallet derive and manage a separate secp256k1 key for Aya API authentication. This simplifies the server to a single signature verification path.
 
 ### 11.2 Request Validation
 
@@ -1832,7 +1892,17 @@ Aya Trade is the team's own decentralized exchange supporting:
 - **Commodities**: Gold, oil, and other commodity-backed instruments
 - **SBE protocol**: Aya Trade's API uses SBE encoding (same as the assistant protocol)
 
-### 12.2 API Integration Points
+### 12.2 Authentication Model
+
+Aya Trade uses an exchange-native signature scheme: the backend constructs the order payload, the mobile signs it with the user's secp256k1 key, and the backend submits the signed order to Aya Trade. This preserves non-custodial guarantees — the backend never holds keys.
+
+**Order flow:**
+1. Backend constructs an SBE-encoded order payload (using Aya Trade's SBE schema)
+2. Order payload is returned to the mobile as part of a `TransactionBundle`
+3. Mobile signs the order with the user's private key
+4. Mobile submits the signed order to Aya Trade (or sends it back to the backend for submission)
+
+### 12.3 API Integration Points
 
 The `aya-exchange` module wraps the Aya Trade API:
 
@@ -1843,7 +1913,8 @@ public interface AyaTradeClient {
     Ticker getTicker(String pair);
     MarketData getMarketData();
 
-    OrderResult placeOrder(OrderRequest order);
+    byte[] constructOrderPayload(OrderRequest order);  // Returns unsigned order for client signing
+    OrderResult submitSignedOrder(byte[] signedOrder);  // Submits client-signed order
     OrderStatus getOrderStatus(String orderId);
     List<Position> getPositions(String publicKey);
 }
@@ -1953,7 +2024,7 @@ Rules for error messages:
 |-----------|-----|-----|-----|
 | Simple query (price, factual) | <800ms | <1.5s | <3s |
 | Transaction-building query | <3s | <6s | <10s |
-| Intent classification | <150ms | <300ms | <500ms |
+| Model tier selection (keyword heuristic) | <10ms | <10ms | <10ms |
 | Streaming first token (Phase 2) | <400ms | <800ms | <1.5s |
 
 ### 14.2 Caching Strategy
@@ -1976,7 +2047,7 @@ Layered caching to minimize external calls:
 - **Prompt caching**: If the LLM provider supports prompt caching (e.g., Anthropic's cache), reuse cached system prompts
 - **Tool calling**: Use the LLM's native function calling when available (avoids manual parsing)
 - **Parallel tool execution**: Run independent tools concurrently while the LLM waits
-- **Short prompts for classification**: Intent classification uses a minimal prompt to stay fast
+- **Minimal tool definitions**: Only include tool definitions the LLM needs for the current conversation state
 
 ---
 
@@ -1990,7 +2061,7 @@ Layered caching to minimize external calls:
 |---------|--------|
 | SBE protocol v1 (all message types) | Full |
 | HTTP endpoint | Full |
-| Intent classification (all intents) | Full |
+| LLM-native intent understanding via tool calling | Full |
 | Tier 1 + Tier 2 model routing | Full |
 | Conversation management | Full |
 | Market data tools (CoinGecko, DeFiLlama) | Full |
@@ -2015,7 +2086,7 @@ Layered caching to minimize external calls:
 | Transaction builder (EVM protocols) | Full |
 | Transaction builder (Solana protocols) | Full |
 | Transaction builder (Bitcoin PSBT) | Full |
-| ABI/IDL scouting pipeline | Full |
+| Pre-populated protocol index + on-demand ABI/IDL fetch | Full |
 | Server-generated transactions for all supported protocols | Full |
 | Streaming responses (WebSocket + StreamChunk) | Full |
 | Aya Trade spot trading | Full |
@@ -2058,7 +2129,7 @@ Layered caching to minimize external calls:
 
 Pure logic tests with no external dependencies:
 
-- Intent classification output validation
+- Model tier selection heuristic correctness
 - Tool selection mapping correctness
 - SBE encoding/decoding for every message type
 - Parameter resolution logic
@@ -2066,7 +2137,7 @@ Pure logic tests with no external dependencies:
 - Fee calculation and safety margin application
 - Slippage calculation
 - Address format validation
-- Session state machine transitions
+- Session lifecycle (creation, loading, expiry)
 - Error message formatting (no internal details leaked)
 
 ### 16.3 Property-Based Tests (`@property`)
@@ -2079,7 +2150,7 @@ Using **jqwik** for property-based testing:
 | **Transaction chain validity** | For any valid `TransactionIntent`, the output `UnsignedTransaction` has a valid `to` address and non-empty `data` for the target chain |
 | **Fee estimation floor** | Estimated fee is always >= base estimate (never negative margin) |
 | **Disambiguation trigger** | If two assets in the token registry share the same symbol for a given query, disambiguation is always triggered |
-| **Intent classification totality** | Classification always returns a valid `Intent` enum value (never null or unknown) |
+| **Tier selection determinism** | For any input message, tier selection always returns either FAST or POWERFUL (never null) |
 | **Rate limiter correctness** | For any sequence of N requests within a 1-minute window where N > limit, at least one is rejected |
 | **Address validation consistency** | An address that passes validation for chain X fails validation for chain Y (no cross-chain address acceptance) |
 | **Schema versioning backward compat** | A message encoded at version N can be decoded by a decoder at version N+1 without errors |

@@ -121,7 +121,7 @@ C4Container
 ```mermaid
 graph TB
     subgraph "API Layer (aya-server)"
-        HTTP[HTTP Server<br/>Undertow/Netty]
+        HTTP[HTTP Server<br/>Netty]
         CODEC[SBE Codec<br/>Encode/Decode]
         AUTH[Auth Verifier<br/>ECDSA secp256k1]
         RATE[Rate Limiter<br/>Redis-backed sliding window]
@@ -274,7 +274,7 @@ graph LR
 | Aspect | Detail |
 |--------|--------|
 | **Purpose** | HTTP endpoint and request lifecycle management |
-| **Responsibilities** | Accept HTTP POST with SBE body. Decode request. Verify signature. Check rate limit. Route to agent pipeline. Encode response. Serve health endpoint. WebSocket endpoint (Phase 2). |
+| **Responsibilities** | Netty-based HTTP server accepting POST with SBE body. Decode request. Verify signature. Check rate limit. Route to agent pipeline. Encode response. Serve health endpoint. WebSocket endpoint (Phase 2). |
 | **Key Interfaces** | `RequestHandler`, `ResponseWriter` |
 | **Dependencies** | `aya-protocol`, `aya-security`, `aya-agent` |
 | **External** | Redis (rate limiting) |
@@ -658,12 +658,12 @@ java -jar aya-backend.jar
 java -jar aya-backend.jar \
   --server.port=8080 \
   --redis.url=redis://redis.internal:6379 \
-  --llm.anthropic.apiKey=sk-ant-... \
-  --llm.openai.apiKey=sk-... \
-  --rpc.ethereum=https://eth-mainnet.g.alchemy.com/v2/... \
-  --rpc.polygon=https://polygon-mainnet.g.alchemy.com/v2/... \
-  --rpc.solana=https://api.mainnet-beta.solana.com \
-  --rpc.bitcoin=https://mempool.space/api
+  --llm.providers.0.apiKey=sk-ant-... \
+  --llm.providers.1.apiKey=sk-... \
+  --coingecko.pro.apiKey=CG-... \
+  --rpc.ethereum.url=https://eth-mainnet.g.alchemy.com/v2/... \
+  --rpc.polygon.url=https://polygon-mainnet.g.alchemy.com/v2/... \
+  --rpc.solana.url=https://api.mainnet-beta.solana.com
 ```
 
 ### 6.4 Configuration
@@ -673,8 +673,9 @@ java -jar aya-backend.jar \
 | `PORT` | 8080 | HTTP server port |
 | `REDIS_URL` | redis://localhost:6379 | Redis connection URL |
 | `SQLITE_PATH` | ./aya.db | SQLite database file path |
-| `LLM_ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `LLM_OPENAI_API_KEY` | — | OpenAI API key |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `OPENAI_API_KEY` | — | OpenAI API key |
+| `COINGECKO_PRO_API_KEY` | — | CoinGecko Pro API key |
 | `ETH_RPC_URL` | — | Ethereum RPC endpoint |
 | `POLYGON_RPC_URL` | — | Polygon RPC endpoint |
 | `ARBITRUM_RPC_URL` | — | Arbitrum RPC endpoint |

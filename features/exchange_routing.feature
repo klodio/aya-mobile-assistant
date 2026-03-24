@@ -39,14 +39,14 @@ Feature: Aya Trade Exchange Routing
 
   # --- Exclusive Venues ---
 
-  @phase2 @fast
+  @phase3 @fast
   Scenario: Leveraged trading routes to Aya Trade exclusively
     When the user says "Open a 5x long on ETH"
     Then Aya routes to Aya Trade as the only venue for perpetual futures
     And presents the order details including leverage and margin requirements
     And includes a risk warning about liquidation
 
-  @phase2 @fast
+  @phase3 @fast
   Scenario: Commodity trading routes to Aya Trade exclusively
     When the user says "Buy gold exposure"
     Then Aya routes to Aya Trade as the only venue for commodities
@@ -82,7 +82,7 @@ Feature: Aya Trade Exchange Routing
     Given the Aya Trade API is not yet available
     When the user asks to trade BTC/USDT
     Then Aya uses on-chain DEXes for the trade
-    And the response may mention that Aya Trade integration is coming soon
+    And the response mentions that Aya Trade integration is coming soon
 
   @phase1 @fast
   Scenario: Leveraged trading requested in Phase 1

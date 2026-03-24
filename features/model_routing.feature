@@ -107,7 +107,7 @@ Feature: LLM Model Routing
     Given a model call exceeds its latency budget (e.g., 5 seconds for Tier 2)
     When the timeout triggers
     Then the system tries the fallback provider
-    Or returns a graceful error if no fallback is available
+    And if no fallback is available, returns a graceful error
 
   # --- Circuit Breaker ---
 

@@ -16,21 +16,22 @@ graph TB
 
     subgraph "Aya Backend (Fat JAR)"
         API[API Layer<br/>HTTP + SBE]
-        AGENT[Agent Pipeline<br/>Classify → Route → Execute]
+        AGENT[Agent Pipeline<br/>LLM orchestrator + tool calling]
         TOOLS[Tool Layer<br/>Market Data, Portfolio, News]
-        TXBUILD[Transaction Builder<br/>ABI/IDL Registry + Protocol Adapters]
+        TXBUILD[Transaction Builder<br/>Protocol Index + Yield Discovery<br/>+ Protocol Adapters]
         EXCHANGE[Aya Trade Integration]
     end
 
     subgraph Storage
-        SQLITE[(SQLite)]
-        REDIS[(Redis)]
+        SQLITE[(SQLite<br/>Protocol Index, ABIs,<br/>Conversations)]
+        REDIS[(Redis<br/>Sessions, Cache)]
     end
 
     subgraph External
         LLM[LLM Providers]
-        MARKET[CoinGecko / DeFiLlama]
+        MARKET[CoinGecko Pro / Free<br/>DeFiLlama]
         RPC[Blockchain RPCs]
+        EXPLORERS[Block Explorers<br/>On-demand ABI fetch]
         AYATRADE[Aya Trade API]
     end
 
@@ -41,6 +42,8 @@ graph TB
     AGENT --> EXCHANGE
     TOOLS --> MARKET
     TXBUILD --> RPC
+    TXBUILD --> EXPLORERS
+    TXBUILD --> MARKET
     EXCHANGE --> AYATRADE
     AGENT --> LLM
     API --> REDIS
@@ -55,6 +58,7 @@ For detailed architecture diagrams (C4 context, container, component), data flow
 | Component | Technology |
 |-----------|-----------|
 | Language | Java 21+ |
+| HTTP Server | Netty (raw) |
 | Build | Gradle (with SBE codegen plugin) |
 | Protocol | SBE (Simple Binary Encoding) over HTTP |
 | Streaming | WebSocket + SBE frames (Phase 2) |
@@ -105,8 +109,9 @@ This compiles all modules, generates SBE codecs from the schema XML, and runs th
 ```bash
 # Set required environment variables
 export REDIS_URL=redis://localhost:6379
-export LLM_ANTHROPIC_API_KEY=sk-...
-export LLM_OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
+export COINGECKO_PRO_API_KEY=CG-...
 export ETH_RPC_URL=https://...
 export SOLANA_RPC_URL=https://...
 
@@ -164,7 +169,7 @@ The schema is at `aya-protocol/src/main/resources/sbe/aya-assistant.xml`. See [S
 | [SPEC.md](SPEC.md) | Exhaustive technical specification — system architecture, SBE protocol definition, agent pipeline, transaction builder, security model, and all other subsystems |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture with C4 diagrams, module decomposition, data flow diagrams, storage schemas, deployment model, and security architecture |
 | [BEHAVIORS_AND_EXPECTATIONS.md](BEHAVIORS_AND_EXPECTATIONS.md) | Behavioral contract — desired/undesired behaviors, edge cases, performance expectations, and guardrail definitions |
-| [features/](features/) | 21 BDD Gherkin feature files covering the backend (15 files) and CLI test client (6 files) |
+| [features/](features/) | 22 BDD Gherkin feature files covering the backend (16 files) and CLI test client (6 files) |
 | [CLI_CLIENT_SPEC.md](CLI_CLIENT_SPEC.md) | CLI test client specification — REPL, script mode, test harness, portfolio simulation |
 | [CLI_CLIENT_ARCHITECTURE.md](CLI_CLIENT_ARCHITECTURE.md) | CLI test client architecture — component diagram, data flows |
 | [CLI_CLIENT_BEHAVIORS_AND_EXPECTATIONS.md](CLI_CLIENT_BEHAVIORS_AND_EXPECTATIONS.md) | CLI test client behavioral contract |

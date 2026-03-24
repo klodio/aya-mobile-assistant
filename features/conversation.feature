@@ -70,10 +70,10 @@ Feature: Conversational Assistant
     Given the user asked about ETH price
     And then asked about SOL staking
     When the user sends "Go back to the first thing we talked about"
-    Then Aya returns to discussing ETH
-    Or asks for clarification if the reference is ambiguous
+    Then Aya either returns to discussing ETH or asks for clarification
+    And the response is relevant to the conversation history
 
-  @phase1
+  @phase1 @fast
   Scenario: Long conversation with context summarization
     Given a conversation with more than 20 turns
     When the user references something from the first turn

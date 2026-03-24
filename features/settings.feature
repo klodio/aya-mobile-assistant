@@ -86,5 +86,6 @@ Feature: Settings Management
   @phase1 @fast
   Scenario: Multiple settings in one message
     When the user says "Set my default chain to Arbitrum and slippage to 0.5%"
-    Then Aya returns two SettingsChangeRequest messages
-    Or handles them sequentially, confirming each one
+    Then Aya handles them sequentially
+    And confirms the first setting change
+    And then confirms the second setting change

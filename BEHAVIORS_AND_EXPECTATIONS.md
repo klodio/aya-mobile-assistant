@@ -127,6 +127,12 @@ It serves as:
 **Expected**: The response includes a freshness warning with the data age.
 **Rationale**: Stale prices can lead to bad trading decisions. Transparency about freshness is critical.
 
+#### B-2.2.7: Portfolio Viewing
+
+**Trigger**: "Show my portfolio" or "What are my holdings?"
+**Expected**: Aya uses the portfolio metadata to display a breakdown by asset, chain, and USD value. Shows allocation percentages and total value.
+**Rationale**: Users need a consolidated view of their holdings.
+
 ### 2.3 Trading & Execution
 
 #### B-2.3.1: Natural Language Trade Request
@@ -184,6 +190,24 @@ It serves as:
 **Trigger**: "What do I have staked?"
 **Expected**: Aya analyzes portfolio metadata and lists staking positions with protocol, amount, and estimated rewards.
 **Rationale**: Users want a consolidated view of their DeFi positions.
+
+#### B-2.4.5: Transfer/Send Tokens
+
+**Trigger**: "Send 1 ETH to 0x742d..."
+**Expected**: Aya validates the address format, presents transfer details (amount, destination, fee), confirms before building transaction.
+**Rationale**: The most basic wallet operation. Must handle address validation and confirmation.
+
+#### B-2.4.6: Lending
+
+**Trigger**: "Lend my USDC on Aave"
+**Expected**: Aya checks available lending protocols via search_protocols, presents APY and risk info, builds the deposit transaction after confirmation.
+**Rationale**: Lending is a core DeFi operation supported by the protocol adapters.
+
+#### B-2.4.7: Borrowing
+
+**Trigger**: "Borrow DAI against my ETH on Aave"
+**Expected**: Aya checks the user's collateral, presents borrow terms (APY, liquidation threshold, health factor), builds the borrow transaction after confirmation with prominent risk warning.
+**Rationale**: Borrowing is high-risk. Clear risk presentation is critical.
 
 ### 2.5 Settings Management
 
@@ -259,19 +283,19 @@ It serves as:
 
 ### 2.8 Protocol Discovery & Yield
 
-#### B-2.8.0.1: Best Yield Query
+#### B-2.8.1: Best Yield Query
 
 **Trigger**: "Where is the best yield for my ETH?", "How can I earn yield on my USDC?"
 **Expected**: Aya queries the protocol index for yield opportunities matching the asset. Returns a ranked list by APY with protocol name, chain, APY, TVL, and risk level. Live APY data from DeFiLlama augments the seed data. Disclaimer included.
 **Rationale**: Users want to maximize returns without manually researching every protocol on every chain.
 
-#### B-2.8.0.2: Multi-Step Orchestration
+#### B-2.8.2: Multi-Step Orchestration
 
 **Trigger**: "Bridge my USDC to Arbitrum and stake into the best yield protocol."
 **Expected**: Aya uses `get_best_yield` to find the best protocol on the target chain, then explains a multi-step plan (bridge → deposit). Each step becomes a transaction after confirmation.
 **Rationale**: The protocol index enables the LLM to reason about cross-chain DeFi opportunities and compose operations that would otherwise require the user to research and execute manually.
 
-#### B-2.8.0.3: Protocol Comparison
+#### B-2.8.3: Protocol Comparison
 
 **Trigger**: "Compare staking options for ETH", "What DEXes are on Polygon?"
 **Expected**: Aya queries the protocol index and presents a comparison with relevant metrics (APY for staking, TVL for DEXes). The user can say "use the first one" to execute.
@@ -279,31 +303,31 @@ It serves as:
 
 ### 2.9 Disambiguation (LLM-Driven)
 
-#### B-2.8.1: Same Ticker, Different Chains
+#### B-2.9.1: Same Ticker, Different Chains
 
 **Trigger**: "Buy USDC" — USDC exists on multiple chains.
 **Expected**: Aya asks which chain. If the user has a default chain set, infers it but still confirms.
 **Rationale**: Buying USDC on the wrong chain is a real and common mistake.
 
-#### B-2.8.2: Same Ticker, Different Tokens
+#### B-2.9.2: Same Ticker, Different Tokens
 
 **Trigger**: "Buy UNI" — multiple tokens share the "UNI" ticker.
 **Expected**: Aya presents the top candidates ranked by market cap. Shows name, chain, contract address, and market cap. Waits for selection.
 **Rationale**: Prevents users from accidentally buying scam tokens with identical tickers.
 
-#### B-2.8.3: Scam Token Filtering
+#### B-2.9.3: Scam Token Filtering
 
 **Trigger**: User requests a popular memecoin with many imitators (e.g., "Buy PEPE").
 **Expected**: Aya shows the legitimate token by market cap and warns about similarly-named low-liquidity tokens.
 **Rationale**: Scam tokens are rampant. The assistant must protect users.
 
-#### B-2.8.4: Context-Based Inference
+#### B-2.9.4: Context-Based Inference
 
 **Trigger**: User has been discussing a specific chain, then makes an ambiguous request.
 **Expected**: Aya infers the chain from conversation context but still confirms.
 **Rationale**: Smart inference reduces friction; confirmation prevents errors.
 
-#### B-2.8.5: Resolution by Contract Address
+#### B-2.9.5: Resolution by Contract Address
 
 **Trigger**: User provides a contract address (e.g., "Buy token at 0x1f984...").
 **Expected**: Aya looks up the contract, identifies the token, and confirms with the user.
@@ -311,19 +335,19 @@ It serves as:
 
 ### 2.10 Financial Disclaimers
 
-#### B-2.9.1: Always Present on Financial Content
+#### B-2.10.1: Always Present on Financial Content
 
 **Trigger**: Any response containing prices, market data, trade suggestions, or strategy advice.
 **Expected**: A financial disclaimer is included. The disclaimer mentions that the content is not financial advice.
 **Rationale**: Legal and ethical requirement. Protects users and the platform.
 
-#### B-2.9.2: Varied Phrasing
+#### B-2.10.2: Varied Phrasing
 
 **Trigger**: Multiple interactions producing disclaimers.
 **Expected**: The disclaimer text varies between responses. Not identical boilerplate every time. The core message ("not financial advice") is always present.
 **Rationale**: Repetitive boilerplate is ignored by users. Varied phrasing is more likely to be read.
 
-#### B-2.9.3: Natural Tone
+#### B-2.10.3: Natural Tone
 
 **Trigger**: Any disclaimer.
 **Expected**: The disclaimer feels natural within the response, not awkwardly appended. Example: "Keep in mind, this is for informational purposes — always do your own research before trading."
@@ -331,19 +355,19 @@ It serves as:
 
 ### 2.11 Speed & Model Routing
 
-#### B-2.10.1: Fast Model for Simple Tasks
+#### B-2.11.1: Fast Model for Simple Tasks
 
 **Trigger**: Price query, settings change, off-topic detection, yes/no confirmation.
 **Expected**: Entire pipeline uses Tier 1 (fast) model. Response under 1 second.
 **Rationale**: Simple tasks should feel instant. Using a powerful model is wasteful.
 
-#### B-2.10.2: Powerful Model for Complex Tasks
+#### B-2.11.2: Powerful Model for Complex Tasks
 
 **Trigger**: Trading strategy, portfolio analysis, ambiguous trade resolution.
 **Expected**: Tier 2 (powerful) model is used for generation. Response acceptable up to 5 seconds.
 **Rationale**: Complex reasoning requires more capable models. Users expect quality over speed for these tasks.
 
-#### B-2.10.3: Tier Selection is Instant
+#### B-2.11.3: Tier Selection is Instant
 
 **Trigger**: Any user message.
 **Expected**: Model tier selection is a simple keyword heuristic (not an LLM call) and completes in under 10ms. No separate classification step — the LLM itself understands intent through tool calling.
@@ -473,6 +497,12 @@ It serves as:
 **Expected**: Aya checks the user's balance (obviously insufficient), informs them of their actual balance, and treats it as an insufficient balance case.
 **Rationale**: Unrealistic amounts should not cause system errors. Handle gracefully.
 
+### 4.11 Session Expiry
+
+**Trigger**: User sends a message with a sessionId that has expired (>24h inactive).
+**Expected**: The backend creates a new session. The user is informed that their previous session has expired and a fresh conversation has started.
+**Rationale**: Clear communication prevents confusion when history is lost.
+
 ---
 
 ## 5. Performance Expectations
@@ -483,7 +513,7 @@ It serves as:
 |-----------|-----|-----|-----|
 | Simple query (price, factual) | <800ms | <1.5s | <3s |
 | Transaction-building query | <3s | <6s | <10s |
-| Intent classification | <150ms | <300ms | <500ms |
+| Model tier selection (heuristic) | <10ms | <10ms | <10ms |
 | Settings command | <500ms | <1s | <2s |
 | Off-topic refusal | <400ms | <800ms | <1.5s |
 | Streaming first token (Phase 2) | <400ms | <800ms | <1.5s |
@@ -508,8 +538,7 @@ It serves as:
 
 | Decision | Latency |
 |----------|---------|
-| Intent classification | <200ms (always Tier 1) |
-| Tier selection | <10ms (rule-based) |
+| Tier selection | <10ms (keyword heuristic, no LLM call) |
 | Provider selection | <5ms (availability check) |
 | Failover decision | <1ms (circuit breaker state check) |
 

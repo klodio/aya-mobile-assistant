@@ -48,16 +48,16 @@ Feature: CLI Portfolio Simulation
     Then a table is displayed with chain, asset, and balance columns
 
   @phase1 @fast
-  Scenario: Custom portfolio JSON file
-    Given a custom portfolio file at /tmp/test_portfolio.json
-    When the CLI starts with --portfolio /tmp/test_portfolio.json
+  Scenario: Custom portfolio YAML file
+    Given a custom portfolio file at /tmp/test_portfolio.yml
+    When the CLI starts with --portfolio /tmp/test_portfolio.yml
     Then the custom portfolio is loaded
 
   @phase1 @fast
-  Scenario: Invalid portfolio JSON
-    Given a malformed portfolio JSON file
+  Scenario: Invalid portfolio YAML
+    Given a malformed portfolio YAML file
     When the CLI tries to load it
-    Then an error message describes the JSON parsing issue
+    Then an error message describes the YAML parsing issue
     And the CLI does not crash
 
   @phase1 @fast
