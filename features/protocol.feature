@@ -158,3 +158,23 @@ Feature: SBE Protocol
     When decoded by an older client
     Then the decoder does not crash
     And the field is treated as an unknown value
+
+  # --- ACTION_PARTIAL Chunk Type ---
+
+  @phase2 @fast
+  Scenario: Action partial chunk buffered until final
+    Given a streaming response that includes a ClientActionRequest
+    When StreamChunk messages with chunkType ACTION_PARTIAL arrive
+    Then the client buffers all chunks
+    And only renders the action when isFinal TRUE is received
+
+  # --- Streaming Error Signaling ---
+
+  @phase2 @fast
+  Scenario: Streaming error contains human-readable message
+    Given a streaming response encounters an error
+    When the final error chunk is received
+    Then chunkType is TEXT_DELTA
+    And isFinal is TRUE
+    And the payload contains a human-readable error message
+    And the WebSocket close code indicates an error

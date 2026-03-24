@@ -161,3 +161,51 @@ Feature: Market Data Queries
       | MATIC |
       | AVAX  |
       | BNB   |
+
+  # --- Token Info Tool ---
+
+  @phase1 @fast
+  Scenario: Token info lookup by symbol
+    When the user asks "Tell me about Chainlink"
+    Then Aya calls get_token_info
+    And returns the full name, symbol (LINK), decimals, chains, and contract addresses
+    And includes a brief description of the token
+
+  @phase1 @fast
+  Scenario: Token info lookup by contract address
+    When the user asks "What token is at 0x514910771AF9Ca656af840dff83E8264EcF986CA?"
+    Then Aya identifies it as Chainlink (LINK) on Ethereum
+    And returns full token details
+
+  # --- News Tool ---
+
+  @phase1 @fast
+  Scenario: Crypto news query
+    When the user asks "What's the latest crypto news?"
+    Then Aya calls get_news via CoinGecko
+    And returns a list of recent headlines with summaries
+    And includes a disclaimer
+
+  @phase1 @fast
+  Scenario: Asset-specific news
+    When the user asks "Any news about Ethereum?"
+    Then Aya calls get_news with symbol ETH
+    And returns Ethereum-related news headlines
+
+  # --- Balance Check Tool ---
+
+  @phase1 @fast
+  Scenario: Direct balance check
+    Given the user has 5 ETH on Ethereum in their portfolio
+    When the user asks "How much ETH do I have?"
+    Then Aya calls check_balance with symbol ETH and chain ETHEREUM
+    And returns the balance (5 ETH) with USD value
+
+  # --- Aya Trade Check Tool ---
+
+  @phase2 @fast
+  Scenario: Aya Trade availability check
+    Given Aya Trade is available
+    When the user wants to swap ETH for USDC
+    Then the LLM calls check_aya_trade with baseAsset ETH and quoteAsset USDC
+    And the response includes whether the pair is available on Aya Trade

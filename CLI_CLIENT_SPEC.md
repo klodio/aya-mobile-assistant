@@ -122,10 +122,10 @@ aya-backend/
         AssertionHelpers.java  # SBE response assertion utilities
     src/main/resources/
       portfolios/
-        default.json           # Default test portfolio
-        whale.json             # High-balance portfolio
-        empty.json             # Empty portfolio
-        multichain.json        # Assets across all chains
+        default.yml            # Default test portfolio
+        whale.yml              # High-balance portfolio
+        empty.yml              # Empty portfolio
+        multichain.yml         # Assets across all chains
     src/test/java/aya/cli/
       ...                      # Unit tests for the CLI itself
 ```
@@ -463,6 +463,16 @@ Quel est le prix de l'ETH ?
 | `response.simulation_passed` | TransactionBundle.simulationPassed is TRUE |
 | `response.chain_id == "POLYGON"` | Response targets a specific chain |
 | `response.latency < 1000` | Response latency under N milliseconds |
+| `response.has_trading_strategy` | Response includes a TradingStrategyResponse |
+| `response.confidence == "HIGH"` | Strategy confidence matches |
+| `response.retryable == true` | ErrorResponse retryable flag matches |
+| `response.source == "COINGECKO"` | MarketDataResponse source matches |
+| `response.action_type == "SWAP"` | ClientActionRequest actionType matches |
+| `response.setting_key == "defaultChain"` | SettingsChangeRequest key matches |
+
+**Semantic assertion definitions:**
+- `response.has_disclaimer`: Checks the `hasDisclaimer` field in the `AssistantResponse` SBE envelope (boolean field, not text heuristic).
+- `response.is_refusal`: Checks that (a) `responseType` is `TEXT`, (b) no structured payload is present, and (c) the text contains one of: "I can only help with", "crypto and finance", "I'm not able to", "outside my area", or similar refusal patterns. This is a heuristic check — the pattern list is maintained in `AssertionHelpers.java` and should be updated as the system prompt evolves.
 
 ### 9.4 Script Exit Codes
 
@@ -479,19 +489,36 @@ Quel est le prix de l'ETH ?
 
 ### 10.1 Portfolio Profiles
 
-JSON files in `src/main/resources/portfolios/` define test portfolios:
+YAML files in `src/main/resources/portfolios/` define test portfolios:
 
-```json
-{
-  "name": "default",
-  "entries": [
-    { "chain": "ETHEREUM", "address": "0xabc...", "asset": "ETH", "contractAddress": "", "balance": "5.0" },
-    { "chain": "ETHEREUM", "address": "0xabc...", "asset": "USDC", "contractAddress": "0xa0b8...", "balance": "2000.0" },
-    { "chain": "POLYGON", "address": "0xabc...", "asset": "POL", "contractAddress": "", "balance": "500.0" },
-    { "chain": "SOLANA", "address": "7xKX...", "asset": "SOL", "contractAddress": "", "balance": "50.0" },
-    { "chain": "BITCOIN", "address": "bc1q...", "asset": "BTC", "contractAddress": "", "balance": "0.1" }
-  ]
-}
+```yaml
+name: default
+entries:
+  - chain: ETHEREUM
+    address: "0xabc..."
+    asset: ETH
+    contractAddress: ""
+    balance: "5.0"
+  - chain: ETHEREUM
+    address: "0xabc..."
+    asset: USDC
+    contractAddress: "0xa0b8..."
+    balance: "2000.0"
+  - chain: POLYGON
+    address: "0xabc..."
+    asset: POL
+    contractAddress: ""
+    balance: "500.0"
+  - chain: SOLANA
+    address: "7xKX..."
+    asset: SOL
+    contractAddress: ""
+    balance: "50.0"
+  - chain: BITCOIN
+    address: "bc1q..."
+    asset: BTC
+    contractAddress: ""
+    balance: "0.1"
 ```
 
 ### 10.2 Built-in Profiles
@@ -618,6 +645,15 @@ public class TestHarness {
     public TestHarness assertHasError(ErrorCategory category) { ... }
     public TestHarness assertLatencyUnder(Duration max) { ... }
     public TestHarness assertChainId(ChainId chain) { ... }
+
+    // Missing assertions identified in audit
+    public TestHarness assertHasTradingStrategy() { ... }
+    public TestHarness assertConfidence(Confidence expected) { ... }
+    public TestHarness assertRetryable(boolean expected) { ... }
+    public TestHarness assertHasMarketData() { ... }
+    public TestHarness assertMarketDataSource(MarketDataSource expected) { ... }
+    public TestHarness assertTransactionField(int sequence, String field, String expected) { ... }
+    public TestHarness assertClientActionParameter(String key, String expectedValue) { ... }
 }
 ```
 
@@ -697,7 +733,7 @@ Assert on SBE-decoded response
 |----------|-------|---------|-------------|
 | `--url` | `-u` | `http://localhost:8080` | Backend URL |
 | `--key` | `-k` | `default` | Key name or path |
-| `--portfolio` | `-p` | `default` | Portfolio profile name or JSON path |
+| `--portfolio` | `-p` | `default` | Portfolio profile name or YAML path |
 | `--session` | `-s` | (new) | Resume a specific session ID |
 | `--stream` | | (off) | Enable streaming mode |
 | `--raw` | | (off) | Show raw SBE hex dumps |
@@ -707,6 +743,9 @@ Assert on SBE-decoded response
 | `--quiet` | `-q` | (off) | Minimal output (for scripts) |
 | `--version` | `-v` | | Print version and exit |
 | `--help` | `-h` | | Print help and exit |
+| `--retry` | | (off) | Retry on HTTP 429 (rate limit) with backoff |
+| `--fail-fast` | | (off) | In script mode, stop on first assertion failure |
+| `--verbose` | | (off) | Debug logging: request/response timing, SBE field-by-field decode, signing details |
 
 ### 13.2 Configuration File
 
@@ -770,7 +809,7 @@ The existing 15 feature files use `TestHarness` step definitions that go through
 
 - SBE round-trip: for any arbitrary `UserMessage`, `encode(decode(x)) == x`
 - Key signing: for any arbitrary payload, `verify(sign(payload, privateKey), publicKey, payload) == true`
-- Portfolio serialization: any valid portfolio profile round-trips through JSON
+- Portfolio serialization: any valid portfolio profile round-trips through YAML
 
 ### 14.5 Build
 

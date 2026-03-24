@@ -149,3 +149,26 @@ Feature: Trading
     When Aya presents a transaction for confirmation
     Then the response includes the totalEstimatedFee
     And the fee is denominated in the chain's native token
+
+  # --- Amount Parsing Edge Cases ---
+
+  @phase1 @fast
+  Scenario: USD-denominated purchase
+    Given the user has 1000 USDC on Ethereum
+    When the user says "Buy $500 worth of ETH"
+    Then Aya converts $500 to the equivalent ETH amount at current price
+    And presents the swap details for confirmation
+
+  @phase1 @fast
+  Scenario: Fractional portfolio amount
+    Given the user has 2 BTC
+    When the user says "Sell half my BTC"
+    Then Aya calculates half as 1 BTC
+    And presents a sell order for 1 BTC
+
+  @phase1 @fast
+  Scenario: Very large unrealistic amount
+    Given the user has 5 ETH on Ethereum
+    When the user says "Buy 1 billion ETH"
+    Then Aya informs the user they only have 5 ETH
+    And does not attempt to build a transaction for 1 billion ETH

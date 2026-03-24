@@ -175,3 +175,18 @@ Feature: Error Handling
     When the user asks to perform an action not yet supported (e.g., "Create an NFT")
     Then Aya explains that the feature is not yet available
     And suggests available alternatives
+
+  # --- Missing ErrorCategory Assertions ---
+
+  @phase2 @fast
+  Scenario: Transaction simulation failure returns TX_SIMULATION_FAILED
+    Given a swap transaction that will revert
+    When Aya simulates the transaction
+    Then an ErrorResponse is returned with errorCategory TX_SIMULATION_FAILED
+    And the message explains the revert reason
+
+  @phase1 @fast
+  Scenario: Unsupported feature returns UNSUPPORTED
+    When the user asks to perform an action not yet available (e.g., "Create an NFT")
+    Then an ErrorResponse is returned with errorCategory UNSUPPORTED
+    And the message explains the feature is not yet available

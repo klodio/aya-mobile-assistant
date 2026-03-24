@@ -195,6 +195,8 @@ A concrete example: the user sends **"Swap 100 USDC for ETH on Polygon"**.
 - Horizontal scaling: multiple instances share Redis for session state; SQLite is per-instance (ABI cache is read-heavy and duplicated safely)
 - Health endpoint: `GET /health` returns 200 with basic status
 
+**Scaling caveat**: Conversation history in SQLite is per-instance. If a session evicts from Redis (after 24h) and the user hits a different instance, the archived history on the original instance is unreachable. For Phase 1 (single instance), this is a non-issue. For horizontal scaling, either (a) accept that expired sessions start fresh regardless, or (b) migrate conversation archival to Redis with longer TTLs. This is documented as a known trade-off in ADR-0002.
+
 ### 2.6 Configuration
 
 All configuration uses **SnakeYAML**. Every setting can be provided in three ways, in order of precedence:
@@ -652,6 +654,8 @@ Delivered over WebSocket for streaming responses.
 Behavior:
 - `TEXT_DELTA`: Client appends to the displayed text immediately (progressive rendering).
 - `ACTION_PARTIAL` / `TRANSACTION_PARTIAL`: Client buffers until `isFinal=TRUE`, then renders the complete action/transaction.
+
+**Error signaling during streaming**: If an error occurs mid-stream, a `StreamChunk` is sent with `chunkType=TEXT_DELTA`, `isFinal=TRUE`, and the payload contains a human-readable error message. For programmatic error handling during streaming, the client should also check for a subsequent HTTP-level error or WebSocket close code. A future schema version may add an `ERROR` value to the `ChunkType` enum for structured streaming errors.
 
 ### 3.4 Type System
 
@@ -1426,6 +1430,7 @@ public interface ProtocolAdapter {
 | `CurveAdapter` | Curve | SWAP (stablecoins) | StableSwap pools per pair |
 | `OneInchAdapter` | 1inch | SWAP (aggregated) | AggregationRouterV6 |
 | `LiFiAdapter` | LI.FI | BRIDGE | LiFiDiamond |
+| `RocketPoolAdapter` | Rocket Pool | STAKE (ETH only) | rETH, RocketPoolDeposit |
 
 Each adapter:
 - Knows its contract addresses per chain
@@ -1561,6 +1566,8 @@ Common multi-step sequences:
 The `TransactionBundle.transactions` group has a `sequence` field for ordering. The client MUST execute them in order, waiting for on-chain confirmation between steps.
 
 For multi-session sequences (like bridge claims), the conversation context tracks the pending action and reminds the user when the claim is available.
+
+**Bridge claim tracking**: Since the system is request-response (no server-initiated push), bridge claims are tracked in the conversation context. When the user sends their next message, the server checks pending bridge states via RPC. If a claim is available, the LLM includes a reminder in its response: "Your bridge from Ethereum to Arbitrum is ready to claim. Would you like me to build the claim transaction?" This is passive tracking — the user must initiate a message for the reminder to surface.
 
 ### 7.10 Aya Trade Exchange Integration
 

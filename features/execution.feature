@@ -182,3 +182,40 @@ Feature: Execution Flow
     When a settings change is requested
     Then a ClientActionRequest with actionType SETTINGS_CHANGE is returned
     And TransactionBundle is never used for settings
+
+  # --- Explicit ActionType Assertions ---
+
+  @phase1 @fast
+  Scenario: Staking returns ClientActionRequest with STAKE type
+    Given the system is in Phase 1
+    When the user confirms staking ETH
+    Then Aya returns a ClientActionRequest
+    And actionType is STAKE
+
+  @phase1 @fast
+  Scenario: Unstaking returns ClientActionRequest with UNSTAKE type
+    Given the system is in Phase 1
+    When the user confirms unstaking ETH
+    Then Aya returns a ClientActionRequest
+    And actionType is UNSTAKE
+
+  @phase1 @fast
+  Scenario: Transfer returns proper action type
+    Given the system is in Phase 1
+    When the user confirms sending 1 ETH to an address
+    Then Aya returns a ClientActionRequest
+    And actionType is TRANSFER
+
+  @phase2 @fast
+  Scenario: Lending returns TransactionBundle
+    Given the system is in Phase 2
+    When the user confirms lending USDC on Aave
+    Then Aya returns a TransactionBundle
+    And the transaction description contains "Deposit" or "Supply"
+
+  @phase2 @fast
+  Scenario: Borrowing returns TransactionBundle with risk info
+    Given the system is in Phase 2
+    When the user confirms borrowing DAI against ETH on Aave
+    Then Aya returns a TransactionBundle
+    And the response text includes liquidation risk warning

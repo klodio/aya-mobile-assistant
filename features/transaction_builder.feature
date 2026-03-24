@@ -222,3 +222,18 @@ Feature: Transaction Builder System
       | Arbitrum | 42161   |
       | Base     | 8453    |
       | Optimism | 10      |
+
+  @phase2 @fast
+  Scenario: Transaction construction on BSC
+    Given the user has funds on BSC
+    When building a swap transaction on BSC
+    Then the chainId is 56
+    And the correct BSC RPC endpoint is used
+
+  @phase2 @fast
+  Scenario: Transaction construction on Avalanche
+    Given the user has funds on Avalanche
+    When building a swap transaction on Avalanche
+    Then the chainId is 43114
+    And the correct Avalanche RPC endpoint is used
+    And Snowscan is queried for ABIs (not the defunct Snowtrace)
