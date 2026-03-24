@@ -257,7 +257,27 @@ It serves as:
 **Expected**: Aya respects the user's explicit venue choice, even if Aya Trade has the pair.
 **Rationale**: User autonomy overrides the priority routing rule when the user is explicit.
 
-### 2.8 Disambiguation (LLM-Driven)
+### 2.8 Protocol Discovery & Yield
+
+#### B-2.8.0.1: Best Yield Query
+
+**Trigger**: "Where is the best yield for my ETH?", "How can I earn yield on my USDC?"
+**Expected**: Aya queries the protocol index for yield opportunities matching the asset. Returns a ranked list by APY with protocol name, chain, APY, TVL, and risk level. Live APY data from DeFiLlama augments the seed data. Disclaimer included.
+**Rationale**: Users want to maximize returns without manually researching every protocol on every chain.
+
+#### B-2.8.0.2: Multi-Step Orchestration
+
+**Trigger**: "Bridge my USDC to Arbitrum and stake into the best yield protocol."
+**Expected**: Aya uses `get_best_yield` to find the best protocol on the target chain, then explains a multi-step plan (bridge → deposit). Each step becomes a transaction after confirmation.
+**Rationale**: The protocol index enables the LLM to reason about cross-chain DeFi opportunities and compose operations that would otherwise require the user to research and execute manually.
+
+#### B-2.8.0.3: Protocol Comparison
+
+**Trigger**: "Compare staking options for ETH", "What DEXes are on Polygon?"
+**Expected**: Aya queries the protocol index and presents a comparison with relevant metrics (APY for staking, TVL for DEXes). The user can say "use the first one" to execute.
+**Rationale**: Informed choice requires comparison. The assistant should make this effortless.
+
+### 2.9 Disambiguation (LLM-Driven)
 
 #### B-2.8.1: Same Ticker, Different Chains
 
@@ -289,7 +309,7 @@ It serves as:
 **Expected**: Aya looks up the contract, identifies the token, and confirms with the user.
 **Rationale**: Contract addresses are unambiguous. Good for power users.
 
-### 2.9 Financial Disclaimers
+### 2.10 Financial Disclaimers
 
 #### B-2.9.1: Always Present on Financial Content
 
@@ -309,7 +329,7 @@ It serves as:
 **Expected**: The disclaimer feels natural within the response, not awkwardly appended. Example: "Keep in mind, this is for informational purposes — always do your own research before trading."
 **Rationale**: A natural disclaimer is more trustworthy and less annoying than a legal-sounding one.
 
-### 2.10 Speed & Model Routing
+### 2.11 Speed & Model Routing
 
 #### B-2.10.1: Fast Model for Simple Tasks
 

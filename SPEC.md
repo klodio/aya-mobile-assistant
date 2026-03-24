@@ -867,6 +867,9 @@ The LLM receives tool definitions and decides which to call. Available tools:
 | `get_tvl` | Fetch protocol TVL from DeFiLlama | User asks about protocol metrics |
 | `get_news` | Fetch crypto news headlines | User asks about news |
 | `analyze_portfolio` | Analyze the user's holdings | User asks about their portfolio |
+| `search_protocols` | Query the protocol registry by category, chain, asset, action | User asks what protocols are available, or LLM needs to find where to execute |
+| `get_best_yield` | Find highest yield for an asset across chains and protocols | User asks "where is the best yield for my ETH?" |
+| `get_protocol_info` | Get details about a specific protocol on a chain | User asks about a protocol, or LLM needs contract addresses |
 | `build_transaction` | Construct unsigned transaction(s) | User confirms they want to execute a trade/stake/bridge |
 | `build_client_action` | Construct a client-side action (Phase 1) | User confirms an action handled by the mobile app |
 | `change_setting` | Construct a settings change request | User wants to change an app setting |
@@ -1122,23 +1125,100 @@ User Intent
 TransactionBundle (2 transactions: approve, swap)
 ```
 
-### 7.2 ABI Registry (EVM)
+### 7.2 Protocol Index
 
-#### 7.2.1 Scouting Pipeline
+The protocol index is a **queryable registry of every DeFi protocol the system can interact with**. It is not just an ABI cache — it's the source of truth the LLM uses to answer questions like "where is the best yield for my ETH?" and to orchestrate multi-step operations like "bridge USDC to Arbitrum and stake into Aave."
 
-The ABI scouting pipeline fetches and indexes verified contract ABIs:
+#### 7.2.1 Design: Pre-Populated Index + On-Demand Fetch
 
-**Scheduled scouting**: A background job runs periodically (every 6 hours) to fetch ABIs for:
-- Top DeFi protocol contracts across all supported EVM chains
-- Contracts in the protocol adapter registry that are not yet cached
-- Newly verified contracts from block explorer APIs
+No background daemon. No scouting pipeline. Instead:
 
-**On-demand scouting**: When the agent needs to interact with a contract whose ABI is not cached:
-1. Query the block explorer API: `GET https://api.etherscan.io/api?module=contract&action=getabi&address={address}`
-2. If verified: parse and cache the ABI
-3. If not verified: warn the user that the contract is unverified, request explicit confirmation
+1. **Bundled seed data**: The fat JAR ships with a pre-populated SQLite seed containing ABIs, IDLs, contract addresses, and protocol metadata for the top ~500 DeFi contracts across all supported chains. This covers all protocol adapters and the most common user interactions.
+2. **On-demand fetch**: When the LLM requests interaction with a contract not in the index, fetch the ABI from the chain's block explorer API in real-time, cache it, and proceed.
+3. **Periodic refresh**: A CLI command (`aya-cli index refresh`) or a scheduled CI job (weekly, not a running daemon) updates the bundled seed data. Developers run this before cutting a release.
 
-**Sources per chain**:
+This matches the project philosophy: simple, no heavy infrastructure, no running daemons.
+
+#### 7.2.2 Protocol Registry Table
+
+The core of the index. Each row describes one protocol deployment on one chain.
+
+```sql
+CREATE TABLE protocol_registry (
+    protocol_id     TEXT NOT NULL,        -- e.g., 'uniswap-v3', 'aave-v3', 'lido'
+    protocol_name   TEXT NOT NULL,        -- e.g., 'Uniswap V3', 'Aave V3', 'Lido'
+    chain_id        INTEGER NOT NULL,     -- ChainId enum value
+    category        TEXT NOT NULL,        -- 'dex', 'lending', 'staking', 'bridge', 'yield', 'perps'
+    actions         TEXT NOT NULL,        -- comma-separated: 'swap,liquidity' or 'stake,unstake'
+    tvl_usd         TEXT,                 -- latest TVL (updated periodically)
+    apy_current     TEXT,                 -- current APY for yield/staking protocols (decimal string)
+    apy_7d_avg      TEXT,                 -- 7-day average APY
+    risk_level      TEXT,                 -- 'low', 'medium', 'high' (protocol risk assessment)
+    website         TEXT,
+    description     TEXT,                 -- human-readable, useful for LLM context
+    updated_at      INTEGER NOT NULL,     -- epoch seconds
+    PRIMARY KEY (protocol_id, chain_id)
+);
+
+CREATE INDEX idx_protocol_category ON protocol_registry(category);
+CREATE INDEX idx_protocol_chain ON protocol_registry(chain_id);
+CREATE INDEX idx_protocol_apy ON protocol_registry(apy_current);
+```
+
+**Example rows**:
+
+| protocol_id | protocol_name | chain_id | category | actions | apy_current | risk_level |
+|------------|---------------|----------|----------|---------|-------------|------------|
+| lido | Lido | 1 | staking | stake,unstake | 3.2 | low |
+| aave-v3 | Aave V3 | 1 | lending | lend,borrow | 2.8 | low |
+| aave-v3 | Aave V3 | 137 | lending | lend,borrow | 3.1 | low |
+| aave-v3 | Aave V3 | 42161 | lending | lend,borrow | 2.9 | low |
+| uniswap-v3 | Uniswap V3 | 1 | dex | swap | — | low |
+| uniswap-v3 | Uniswap V3 | 137 | dex | swap | — | low |
+| marinade | Marinade | 50000 | staking | stake,unstake | 6.8 | low |
+| jupiter | Jupiter | 50000 | dex | swap | — | low |
+| curve | Curve | 1 | dex | swap | — | low |
+| lifi | LI.FI | 1 | bridge | bridge | — | medium |
+
+#### 7.2.3 Contract Address Table
+
+Maps protocol deployments to their actual contract addresses.
+
+```sql
+CREATE TABLE protocol_contracts (
+    protocol_id     TEXT NOT NULL,
+    chain_id        INTEGER NOT NULL,
+    contract_name   TEXT NOT NULL,        -- e.g., 'SwapRouter02', 'Pool', 'stETH'
+    address         TEXT NOT NULL,        -- lowercase, 0x-prefixed
+    PRIMARY KEY (protocol_id, chain_id, contract_name),
+    FOREIGN KEY (protocol_id, chain_id) REFERENCES protocol_registry(protocol_id, chain_id)
+);
+```
+
+#### 7.2.4 ABI Registry
+
+Stores the actual ABI JSON for each contract.
+
+```sql
+CREATE TABLE abi_registry (
+    chain_id     INTEGER NOT NULL,
+    address      TEXT NOT NULL,           -- lowercase, 0x-prefixed
+    abi_json     TEXT NOT NULL,
+    source       TEXT NOT NULL,           -- 'bundled', 'etherscan', 'manual'
+    verified     INTEGER NOT NULL,        -- 1 if verified on explorer
+    fetched_at   INTEGER NOT NULL,
+    PRIMARY KEY (chain_id, address)
+);
+```
+
+**Bundled ABIs**: The seed data includes ABIs for every contract in `protocol_contracts`. These are checked into the repo and loaded on first run.
+
+**On-demand ABIs**: For contracts not in the seed:
+1. Query block explorer API: `GET https://api.etherscan.io/api?module=contract&action=getabi&address={address}`
+2. If verified: parse, cache in SQLite, load into memory LRU
+3. If not verified: warn user, request explicit confirmation
+
+**Explorer sources per chain**:
 | Chain | Block Explorer API |
 |-------|--------------------|
 | Ethereum | api.etherscan.io |
@@ -1149,55 +1229,102 @@ The ABI scouting pipeline fetches and indexes verified contract ABIs:
 | BSC | api.bscscan.com |
 | Avalanche | api.snowtrace.io |
 
-#### 7.2.2 Storage & Indexing
-
-SQLite table:
-```sql
-CREATE TABLE abi_registry (
-    chain_id     INTEGER NOT NULL,
-    address      TEXT NOT NULL,      -- lowercase, 0x-prefixed
-    abi_json     TEXT NOT NULL,       -- raw JSON ABI
-    source       TEXT NOT NULL,       -- 'etherscan', 'manual', etc.
-    verified     INTEGER NOT NULL,    -- 1 if verified on explorer
-    fetched_at   INTEGER NOT NULL,    -- epoch seconds
-    PRIMARY KEY (chain_id, address)
-);
-
-CREATE INDEX idx_abi_fetched ON abi_registry(fetched_at);
-```
-
-#### 7.2.3 Cache Strategy
-
-- **In-memory LRU cache**: Parsed `ContractAbi` objects (function signatures, event signatures, input/output types). Capacity: 10,000 entries. TTL: 24 hours.
-- **SQLite**: Persistent storage. Never evicted (only updated on re-fetch).
-- **Lookup order**: Memory cache → SQLite → Block explorer API → User warning (unverified)
+**Cache strategy**:
+- **In-memory LRU**: Parsed `ContractAbi` objects. Capacity: 10,000 entries. TTL: 24 hours.
+- **SQLite**: Persistent. Never evicted.
+- **Lookup order**: Memory LRU → SQLite → Block explorer API → User warning (unverified)
 
 ### 7.3 IDL Registry (Solana)
 
-#### 7.3.1 Anchor IDL Fetching
+Same philosophy — bundled seed + on-demand fetch.
 
-Solana programs built with Anchor store their IDL on-chain. The fetching pipeline:
-
-1. **On-chain IDL account**: For Anchor programs, the IDL is stored at a PDA derived from the program address. Fetch via RPC: `getAccountInfo` on the IDL account address.
-2. **DeployDAO index**: Fallback source. `GET https://raw.githubusercontent.com/DeployDAO/solana-program-index/master/idls/{programAddress}.json`
-3. **Manual registry**: For programs without on-chain IDLs, manually maintained IDL files.
-
-#### 7.3.2 Storage & Indexing
-
-SQLite table:
 ```sql
 CREATE TABLE idl_registry (
     program_address  TEXT NOT NULL PRIMARY KEY,
     idl_json         TEXT NOT NULL,
-    source           TEXT NOT NULL,    -- 'onchain', 'deploydao', 'manual'
+    source           TEXT NOT NULL,        -- 'bundled', 'onchain', 'deploydao', 'manual'
     fetched_at       INTEGER NOT NULL,
-    anchor_version   TEXT              -- Anchor framework version, if known
+    anchor_version   TEXT
 );
 ```
 
+**Bundled IDLs**: Seed data includes IDLs for Jupiter, Marinade, Raydium, and other supported Solana programs.
+
+**On-demand IDLs**:
+1. Fetch from on-chain IDL account (Anchor PDA)
+2. Fallback: DeployDAO index on GitHub
+3. Cache in SQLite
+
+### 7.4 LLM Tools for Protocol Discovery
+
+The protocol index is exposed to the LLM via tools so it can reason about what's available:
+
+**`search_protocols`** — Query the protocol registry
+
+- Parameters: `category` (optional: dex, lending, staking, bridge, yield, perps), `chain` (optional), `asset` (optional: filter by protocols that support this asset), `action` (optional: swap, stake, lend, bridge)
+- Returns: list of matching protocols with name, chain, category, actions, APY, TVL, risk level
+- Example: `search_protocols(category="staking", asset="ETH")` → returns Lido (3.2% APY, Ethereum), Rocket Pool (3.0% APY, Ethereum), Aave V3 supply (2.8% APY, multi-chain)
+
+**`get_best_yield`** — Find the highest yield for a given asset
+
+- Parameters: `asset` (required), `chain` (optional — if omitted, search all chains), `maxRisk` (optional: low, medium, high)
+- Returns: ranked list of yield opportunities sorted by APY descending, with protocol name, chain, APY, TVL, risk level
+- Example: `get_best_yield(asset="ETH")` → Lido on Ethereum (3.2%), Aave V3 on Arbitrum (2.9%), Aave V3 on Ethereum (2.8%)...
+
+**`get_protocol_info`** — Detailed info about a specific protocol
+
+- Parameters: `protocol` (required), `chain` (optional)
+- Returns: full protocol details — description, supported actions, contract addresses, current APY, TVL, risk level
+- Example: `get_protocol_info(protocol="aave-v3", chain="polygon")` → Aave V3 on Polygon, actions: lend/borrow, APY: 3.1%, TVL: $1.2B, contracts: Pool at 0x794a...
+
+These tools allow the LLM to orchestrate complex multi-step operations:
+
+**Example: "Bridge my USDC to Arbitrum and stake into the best yield protocol"**
+1. LLM calls `get_best_yield(asset="USDC", chain="ARBITRUM")` → Aave V3 at 3.1%
+2. LLM calls `build_transaction` to bridge USDC from user's chain to Arbitrum (via LiFi)
+3. LLM explains: "I'll bridge 100 USDC to Arbitrum, then deposit into Aave V3 for ~3.1% APY. This requires two steps..."
+4. After user confirms and bridge completes, LLM calls `build_transaction` for Aave V3 deposit
+
+**Example: "Where is the best yield for my ETH?"**
+1. LLM calls `get_best_yield(asset="ETH")`
+2. LLM presents: "Here are the best yield options for ETH: 1) Lido staking on Ethereum — 3.2% APY (low risk), 2) Aave V3 supply on Arbitrum — 2.9% APY (low risk)... Would you like to stake with any of these?"
+
+### 7.5 Seed Data Management
+
+The bundled seed data lives in the repo and is loaded into SQLite on first run:
+
+```
+aya-txbuilder/src/main/resources/seed/
+  protocol_registry.yml       # All protocol metadata
+  protocol_contracts.yml      # All contract addresses
+  abis/                       # Bundled ABI JSON files
+    ethereum/
+      0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45.json  # Uniswap SwapRouter02
+      0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2.json  # Aave V3 Pool
+      ...
+    polygon/
+      ...
+    arbitrum/
+      ...
+  idls/                       # Bundled Solana IDLs
+    JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4.json  # Jupiter
+    MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD.json  # Marinade
+    ...
+```
+
+**Refresh process** (developer or CI, not runtime):
+```bash
+# Fetches latest ABIs, IDLs, APYs, TVLs and updates seed files
+aya-cli index refresh --output aya-txbuilder/src/main/resources/seed/
+
+# Then commit the updated seed and cut a release
+```
+
+APY and TVL data in the seed is a snapshot. At runtime, the `get_best_yield` and `search_protocols` tools fetch live APY/TVL from DeFiLlama to augment the seed data — the seed provides the protocol structure, live APIs provide current numbers.
+
 Same caching strategy as ABIs: in-memory LRU + SQLite + on-demand fetch.
 
-### 7.4 Bitcoin Transaction Construction (PSBT)
+### 7.6 Bitcoin Transaction Construction (PSBT)
 
 Bitcoin transactions use the PSBT standard (BIP-174):
 
@@ -1221,7 +1348,7 @@ Bitcoin transactions use the PSBT standard (BIP-174):
 
 5. **Output**: Base64-encoded PSBT string in the `TransactionBundle.transactions[0].data` field.
 
-### 7.5 Protocol Adapter Layer
+### 7.7 Protocol Adapter Layer
 
 #### 7.5.1 Adapter Interface
 
@@ -1300,7 +1427,7 @@ Each Solana adapter:
 4. ABIs/IDLs will be fetched automatically by the registries
 5. Write tests: unit (parameter resolution, calldata encoding), integration (testnet simulation)
 
-### 7.6 Transaction Construction Pipeline
+### 7.8 Transaction Construction Pipeline
 
 #### 7.6.1 Intent to Protocol Selection
 
@@ -1381,7 +1508,7 @@ The client:
 4. Client signs with the user's private key and broadcasts via RPC
 5. Client sends back `TransactionStatus` messages as confirmations arrive
 
-### 7.7 Multi-Step Transaction Sequences
+### 7.9 Multi-Step Transaction Sequences
 
 Common multi-step sequences:
 
@@ -1396,7 +1523,7 @@ The `TransactionBundle.transactions` group has a `sequence` field for ordering. 
 
 For multi-session sequences (like bridge claims), the conversation context tracks the pending action and reminds the user when the claim is available.
 
-### 7.8 Aya Trade Exchange Integration
+### 7.10 Aya Trade Exchange Integration
 
 See [Section 12](#12-aya-trade-exchange-integration) for full details. Within the transaction builder:
 
