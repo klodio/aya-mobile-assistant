@@ -89,7 +89,7 @@ C4Container
         Container(api, "API Layer", "Java / HTTP", "SBE codec, auth, rate limiter, request routing")
         Container(agent, "Agent Pipeline", "Java", "Intent classification, model routing, tool dispatch, response assembly")
         Container(tools, "Tool Layer", "Java", "Market data, portfolio, news, settings, strategy tools")
-        Container(txbuild, "Transaction Builder", "Java", "ABI/IDL registries, protocol adapters, tx construction pipeline")
+        Container(txbuild, "Transaction Builder", "Java", "Protocol index, ABI/IDL registries, protocol adapters, yield discovery, tx construction pipeline")
         Container(exchange, "Aya Trade Client", "Java", "Exchange API integration, priority routing")
         Container(security, "Security Module", "Java", "Signature verification, input sanitization, prompt injection defense")
         ContainerDb(sqlite, "SQLite", "Embedded DB", "ABI/IDL cache, conversation history, token registry")
@@ -175,10 +175,16 @@ Note the loop: the LLM calls tools, receives results, and may call more tools be
 graph TB
     subgraph "Transaction Builder (aya-txbuilder)"
         direction TB
-        subgraph "Registry Layer"
-            ABIREG[ABI Registry<br/>EVM contract ABIs]
-            IDLREG[IDL Registry<br/>Solana program IDLs]
+        subgraph "Protocol Index (pre-populated + on-demand)"
+            PROTOREG[Protocol Registry<br/>Protocols, chains, actions, APY, TVL]
+            ABIREG[ABI Registry<br/>Bundled + on-demand EVM ABIs]
+            IDLREG[IDL Registry<br/>Bundled + on-demand Solana IDLs]
             TOKENREG[Token Registry<br/>Address resolution]
+        end
+        subgraph "Discovery Tools (LLM-callable)"
+            SEARCH[search_protocols<br/>Query by category/chain/asset]
+            YIELD[get_best_yield<br/>Ranked yield opportunities]
+            PROTOINFO[get_protocol_info<br/>Protocol details]
         end
         subgraph "Adapter Layer"
             UNISWAP[Uniswap V3 Adapter]
@@ -200,7 +206,14 @@ graph TB
         end
     end
 
-    INTENT[User Intent] --> SELECTOR
+    INTENT[User Intent / LLM Tool Call] --> SEARCH
+    INTENT --> YIELD
+    INTENT --> SELECTOR
+    SEARCH --> PROTOREG
+    YIELD --> PROTOREG
+    YIELD --> DEFILLAMA[DeFiLlama<br/>Live APY/TVL]
+    PROTOINFO --> PROTOREG
+
     SELECTOR --> RESOLVER
     RESOLVER --> BUILDER
     BUILDER --> SIMULATOR
@@ -212,9 +225,12 @@ graph TB
     BUILDER --> IDLREG
     RESOLVER --> TOKENREG
     SIMULATOR --> RPC[Blockchain RPCs]
-    ABIREG --> SQLITE[(SQLite)]
-    ABIREG --> EXPLORERS[Block Explorers]
+    PROTOREG --> SQLITE[(SQLite<br/>Bundled seed + runtime cache)]
+    ABIREG --> SQLITE
+    ABIREG --> EXPLORERS[Block Explorers<br/>On-demand ABI fetch]
 ```
+
+Key design: The Protocol Index is **pre-populated** with bundled seed data (YAML + ABI/IDL files shipped in the JAR). No background daemon. Live APY/TVL comes from DeFiLlama at query time. On-demand ABI fetch from block explorers for unknown contracts.
 
 ---
 
@@ -287,11 +303,11 @@ graph LR
 
 | Aspect | Detail |
 |--------|--------|
-| **Purpose** | Transaction construction for all supported chains and protocols |
-| **Responsibilities** | ABI/IDL scouting and caching. Protocol adapter management. Transaction construction pipeline (resolve, build, simulate, estimate, serialize). Multi-step sequence orchestration. Token address resolution. |
-| **Key Interfaces** | `ChainAdapter`, `ProtocolAdapter`, `AbiRegistry`, `IdlRegistry`, `TransactionPipeline` |
+| **Purpose** | Protocol index, yield discovery, and transaction construction for all supported chains |
+| **Responsibilities** | Pre-populated protocol index (registry of protocols, chains, actions, APYs). ABI/IDL storage (bundled seed + on-demand fetch). Protocol adapter management. Discovery tools for the LLM (`search_protocols`, `get_best_yield`, `get_protocol_info`). Transaction construction pipeline (resolve, build, simulate, estimate, serialize). Multi-step sequence orchestration. |
+| **Key Interfaces** | `ChainAdapter`, `ProtocolAdapter`, `ProtocolIndex`, `AbiRegistry`, `IdlRegistry`, `TransactionPipeline` |
 | **Dependencies** | `aya-protocol` |
-| **External** | Blockchain RPCs, block explorer APIs, SQLite (ABI/IDL cache) |
+| **External** | Blockchain RPCs, block explorer APIs (on-demand ABI fetch), DeFiLlama (live APY/TVL), SQLite (protocol index + ABI/IDL cache) |
 
 #### aya-exchange
 
@@ -487,25 +503,53 @@ sequenceDiagram
 SQLite is used for persistent, local data. The database file is created automatically on first run.
 
 ```sql
--- ABI Registry: Cached smart contract ABIs for EVM chains
+-- Protocol Registry: Queryable index of all known DeFi protocols
+-- Pre-populated from bundled seed data, augmented with live APY/TVL
+CREATE TABLE protocol_registry (
+    protocol_id     TEXT NOT NULL,
+    protocol_name   TEXT NOT NULL,
+    chain_id        INTEGER NOT NULL,
+    category        TEXT NOT NULL,         -- 'dex', 'lending', 'staking', 'bridge', 'yield', 'perps'
+    actions         TEXT NOT NULL,         -- comma-separated: 'swap,liquidity'
+    tvl_usd         TEXT,
+    apy_current     TEXT,
+    apy_7d_avg      TEXT,
+    risk_level      TEXT,                  -- 'low', 'medium', 'high'
+    website         TEXT,
+    description     TEXT,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (protocol_id, chain_id)
+);
+CREATE INDEX idx_protocol_category ON protocol_registry(category);
+CREATE INDEX idx_protocol_chain ON protocol_registry(chain_id);
+
+-- Protocol Contracts: Maps protocols to their contract addresses
+CREATE TABLE protocol_contracts (
+    protocol_id     TEXT NOT NULL,
+    chain_id        INTEGER NOT NULL,
+    contract_name   TEXT NOT NULL,
+    address         TEXT NOT NULL,
+    PRIMARY KEY (protocol_id, chain_id, contract_name)
+);
+
+-- ABI Registry: Bundled + on-demand EVM contract ABIs
 CREATE TABLE abi_registry (
     chain_id        INTEGER NOT NULL,
     address         TEXT NOT NULL,         -- lowercase, 0x-prefixed
     abi_json        TEXT NOT NULL,
-    source          TEXT NOT NULL,         -- 'etherscan', 'polygonscan', 'manual'
+    source          TEXT NOT NULL,         -- 'bundled', 'etherscan', 'manual'
     verified        INTEGER NOT NULL,      -- 1 = verified on explorer
-    fetched_at      INTEGER NOT NULL,      -- epoch seconds
+    fetched_at      INTEGER NOT NULL,
     PRIMARY KEY (chain_id, address)
 );
-CREATE INDEX idx_abi_fetched ON abi_registry(fetched_at);
 
--- IDL Registry: Cached Solana program IDLs
+-- IDL Registry: Bundled + on-demand Solana program IDLs
 CREATE TABLE idl_registry (
     program_address TEXT NOT NULL PRIMARY KEY,
     idl_json        TEXT NOT NULL,
-    source          TEXT NOT NULL,         -- 'onchain', 'deploydao', 'manual'
+    source          TEXT NOT NULL,         -- 'bundled', 'onchain', 'deploydao', 'manual'
     fetched_at      INTEGER NOT NULL,
-    anchor_version  TEXT                   -- Anchor framework version if known
+    anchor_version  TEXT
 );
 
 -- Conversation History: Full turn-by-turn record
@@ -566,13 +610,16 @@ CREATE TABLE market_data_cache (
 
 | Data | Storage | Rationale |
 |------|---------|-----------|
-| ABI/IDL cache | SQLite | Persistent, read-heavy, no concurrency concerns |
+| Protocol registry | SQLite | Pre-populated seed, queryable by LLM tools, read-heavy |
+| Protocol contracts | SQLite | Maps protocols to addresses, bundled with seed |
+| ABI/IDL cache | SQLite | Bundled seed + on-demand fetch, read-heavy |
 | Conversation history | SQLite + Redis | Recent turns in Redis (fast), full history in SQLite (persistent) |
 | Session state | Redis | Ephemeral, needs fast access, shared across instances |
 | Rate limiting | Redis | Shared across instances, atomic operations, auto-expiry |
 | Token registry | SQLite | Persistent reference data, read-heavy |
 | Contract blacklist | SQLite | Persistent, rarely written, frequently read |
 | Tool result cache | Redis | Short-lived, shared across instances |
+| Live APY/TVL | Redis | Cached from DeFiLlama, short TTL (5 min), augments seed data |
 
 ---
 
