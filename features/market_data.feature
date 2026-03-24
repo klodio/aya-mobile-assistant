@@ -1,0 +1,120 @@
+@bdd
+Feature: Market Data Queries
+  As a user of the Aya wallet
+  I want to ask about prices, market conditions, and protocol metrics
+  So that I can make informed decisions about my crypto assets
+
+  # References: SPEC Section 8.2 (Market Data Tools), Section 4 (Agent Pipeline)
+  # B&E Section 2.2 (Market Data & Information)
+
+  Background:
+    Given the Aya backend is running
+    And the user has a valid key pair
+    And market data APIs are available
+
+  @phase1 @fast
+  Scenario: Single asset price query
+    When the user asks "What is the price of BTC?"
+    Then Aya returns the current BTC price in USD
+    And the response includes the 24-hour price change percentage
+    And the data source is attributed
+    And the response includes a financial disclaimer
+
+  @phase1 @fast
+  Scenario: Multi-asset price query
+    When the user asks "Show me prices for ETH, SOL, and AVAX"
+    Then Aya returns prices for all three assets
+    And each price includes the 24-hour change
+    And sources are attributed
+
+  @phase1 @fast
+  Scenario: Price query with display currency
+    Given the user's display currency is set to EUR
+    When the user asks "What is the price of ETH?"
+    Then Aya returns the ETH price in EUR
+
+  @phase1 @fast
+  Scenario: Top gainers query
+    When the user asks "What are today's top gainers?"
+    Then Aya returns a list of top gaining assets
+    And each entry includes the symbol, price, and percentage change
+    And the list is sorted by 24h change descending
+
+  @phase1 @fast
+  Scenario: Top losers query
+    When the user asks "Show me the biggest losers today"
+    Then Aya returns a list of top losing assets sorted by 24h change ascending
+
+  @phase1 @fast
+  Scenario: TVL query for a DeFi protocol
+    When the user asks "What's the TVL of Aave?"
+    Then Aya queries DeFiLlama
+    And returns the total TVL for Aave
+    And optionally includes a per-chain breakdown
+    And the source is attributed as DeFiLlama
+
+  @phase1 @fast
+  Scenario: Market overview query
+    When the user asks "How's the market doing?"
+    Then Aya provides a summary of overall market conditions
+    And mentions total crypto market cap
+    And mentions BTC dominance
+    And includes a disclaimer
+
+  @phase1 @fast
+  Scenario: Unknown asset query
+    When the user asks "What's the price of XYZNONEXISTENT?"
+    Then Aya responds that the asset was not found
+    And suggests checking the asset name or ticker
+
+  @phase1 @fast
+  Scenario: Asset with ambiguous ticker in price query
+    When the user asks "What's the price of UNI?"
+    And multiple tokens match the ticker "UNI"
+    Then Aya returns the price of the most prominent UNI (Uniswap)
+    And mentions the full name to avoid confusion
+
+  @phase1
+  Scenario: Stale data warning
+    Given the market data API is responding with data older than 60 seconds
+    When the user asks for a price
+    Then the response includes a data freshness warning
+    And mentions the age of the data
+
+  @phase2 @fast
+  Scenario: Aya Trade market data as primary source
+    Given Aya Trade market data API is available
+    And Aya Trade lists ETH/USDT
+    When the user asks "What's the price of ETH?"
+    Then Aya Trade is the primary data source
+    And the source is attributed as Aya Trade
+
+  @phase2 @fast
+  Scenario: Aya Trade fallback to CoinGecko
+    Given Aya Trade market data API is available
+    But Aya Trade does not list TOKEN_X
+    When the user asks "What's the price of TOKEN_X?"
+    Then Aya falls back to CoinGecko
+    And the source is attributed as CoinGecko
+
+  @phase1 @fast
+  Scenario: Market data caching within TTL
+    Given the user asked "What's the price of BTC?" 10 seconds ago
+    When the user asks "What's the price of BTC?" again
+    Then the response uses cached data
+    And does not make a new external API call
+
+  @phase1 @fast
+  Scenario Outline: Price query for various assets
+    When the user asks "What's the price of <asset>?"
+    Then Aya returns a valid price for <asset>
+    And the response includes a 24h change percentage
+
+    Examples:
+      | asset |
+      | BTC   |
+      | ETH   |
+      | SOL   |
+      | MATIC |
+      | AVAX  |
+      | BNB   |

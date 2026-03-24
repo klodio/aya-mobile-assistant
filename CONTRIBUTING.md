@@ -1,0 +1,183 @@
+# Aya — Developer Rules
+
+These rules are non-negotiable. Every contributor must follow them.
+
+---
+
+## 1. No Docker
+
+Aya deploys as a single fat JAR. No Dockerfiles, no docker-compose, no container orchestration. If you need the backend running, it's `java -jar aya-backend.jar`. If you need Redis, install it or use a managed instance. That's it.
+
+## 2. Performance Over Inheritance
+
+Favor flat, direct code over deep class hierarchies. Duplication is acceptable — and often preferable — when it buys clarity and performance.
+
+**Do this:**
+```java
+// Direct, clear, no virtual dispatch
+public static byte[] encodeSwapTransaction(SwapParams params) {
+    // flat, obvious logic
+}
+
+public static byte[] encodeStakeTransaction(StakeParams params) {
+    // similar but different — that's fine
+}
+```
+
+**Not this:**
+```java
+// Deep hierarchy, hard to follow, virtual dispatch overhead
+abstract class AbstractTransactionEncoder<T extends TransactionParams> {
+    protected abstract void encodeSpecific(T params, ByteBuffer buffer);
+    // ... 200 lines of "framework"
+}
+
+class SwapTransactionEncoder extends AbstractTransactionEncoder<SwapParams> { ... }
+class StakeTransactionEncoder extends AbstractTransactionEncoder<StakeParams> { ... }
+```
+
+When in doubt between DRY and clarity, choose clarity.
+
+## 3. Libraries and Utils Over Heavy Classes
+
+Prefer static utility methods and lightweight modules. Avoid heavyweight OOP abstractions, deep injection chains, and framework magic.
+
+**Do this:**
+```java
+public final class SbeCodec {
+    private SbeCodec() {}
+    public static byte[] encode(UserMessage msg) { ... }
+    public static AssistantResponse decode(byte[] bytes) { ... }
+}
+```
+
+**Not this:**
+```java
+@Component
+@Singleton
+public class SbeCodecService implements CodecServiceInterface {
+    @Inject private CodecFactory factory;
+    @Inject private CodecRegistry registry;
+    // ...
+}
+```
+
+## 4. GC-Favorable Patterns
+
+This project handles financial transactions over SBE — a protocol designed for zero-copy, low-latency systems. The code should match.
+
+- **Zero-copy where possible**: SBE's flyweight pattern encodes/decodes directly on a buffer. Don't copy data into intermediate objects unnecessarily.
+- **Reuse buffers**: Use `ThreadLocal<ByteBuffer>` or buffer pools for hot paths (SBE encode/decode, HTTP request/response).
+- **Avoid boxing**: Use primitive types. No `Integer` where `int` works. No `Map<String, Object>` for structured data — use records or typed objects.
+- **Minimize allocations in hot paths**: Pre-allocate where possible. Avoid `String.format()` in request paths — use `StringBuilder` or pre-built strings.
+- **Prefer records over classes** for data carriers (Java records are final, compact, allocation-efficient).
+
+## 5. Keep Specs Up to Date
+
+The specs ([SPEC.md](SPEC.md), [ARCHITECTURE.md](ARCHITECTURE.md), [BEHAVIORS_AND_EXPECTATIONS.md](BEHAVIORS_AND_EXPECTATIONS.md), and their CLI counterparts) are living documents. When code changes, the spec changes in the same PR.
+
+- Added a new tool? Update SPEC.md Section 8 and the tool table in Section 4.4.
+- Changed the SBE schema? Update SPEC.md Section 3.
+- Modified behavior? Update BEHAVIORS_AND_EXPECTATIONS.md and the relevant feature files.
+
+A PR that changes behavior without updating specs will be rejected.
+
+## 6. SnakeYAML Configuration
+
+All configuration uses YAML via SnakeYAML. One format, everywhere.
+
+- Backend: `application.yml`
+- CLI client: `~/.aya-cli/config.yml`
+- Portfolio profiles: YAML (not JSON — despite the current `.json` extension, migrate to `.yml`)
+- Test fixtures: YAML
+
+No `.properties` files. No XML configuration (SBE schema XML is the exception — that's a protocol definition, not config). No annotation-driven config magic.
+
+```yaml
+# application.yml — the one config file
+server:
+  port: 8080
+
+redis:
+  url: redis://localhost:6379
+
+llm:
+  providers:
+    - name: anthropic
+      tier: fast
+      apiKey: ${LLM_ANTHROPIC_API_KEY}
+    - name: openai
+      tier: powerful
+      apiKey: ${LLM_OPENAI_API_KEY}
+
+rpc:
+  ethereum: ${ETH_RPC_URL}
+  polygon: ${POLYGON_RPC_URL}
+  solana: ${SOLANA_RPC_URL}
+
+sqlite:
+  path: ./aya.db
+```
+
+Environment variable substitution (`${VAR}`) is supported in YAML values. Secrets (API keys) should always come from environment variables, never hardcoded in YAML.
+
+## 7. Architecture Decision Records (ADRs)
+
+Any large change — new module, protocol change, new external dependency, architectural pattern shift — requires an ADR.
+
+ADRs live in `docs/adr/` and follow this format:
+
+```
+docs/adr/
+  0001-sbe-over-http.md
+  0002-sqlite-over-postgres.md
+  0003-llm-native-agent-design.md
+  ...
+```
+
+Each ADR:
+
+```markdown
+# ADR-NNNN: Title
+
+**Date**: YYYY-MM-DD
+**Status**: Accepted | Superseded by ADR-XXXX | Deprecated
+
+## Context
+What is the problem or decision we're facing?
+
+## Decision
+What did we decide?
+
+## Consequences
+What are the trade-offs? What becomes easier? What becomes harder?
+```
+
+ADRs are immutable once accepted. If a decision is reversed, write a new ADR that supersedes the old one. Never edit an accepted ADR.
+
+## 8. No Bugfix Without Tests
+
+Every bugfix PR must include a test that:
+
+1. **Reproduces the bug** — the test fails without the fix
+2. **Passes with the fix** — proves the fix works
+3. **Prevents regression** — the test stays in the suite permanently
+
+No exceptions. If you can't write a test for it, you don't understand the bug well enough to fix it.
+
+For adversarial bugs (prompt injection bypasses, etc.), add the reproduction to the `@adversarial` test suite. For protocol bugs, add an SBE round-trip test. For transaction builder bugs, add a simulation test.
+
+---
+
+## Summary
+
+| Rule | One-Liner |
+|------|-----------|
+| No Docker | Fat JAR only |
+| Performance > inheritance | Flat, direct, duplicate if needed |
+| Utils > heavy classes | Static methods, no framework magic |
+| GC-favorable | Zero-copy, reuse buffers, avoid boxing |
+| Specs up to date | Code change = spec change, same PR |
+| SnakeYAML config | One format everywhere |
+| ADRs | Large changes get a decision record |
+| No bugfix without tests | Reproduce → fix → regression test |
