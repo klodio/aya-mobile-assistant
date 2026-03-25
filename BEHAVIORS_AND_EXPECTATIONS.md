@@ -586,6 +586,7 @@ It serves as:
 | **Unverified warning** | Warn users when interacting with unverified contracts |
 | **Sequential execution** | Multi-step transactions must be executed in order with confirmation between steps |
 | **Gas sanity check** | Warn if estimated gas is >10x typical for the operation |
+| **No action type limitation** | The LLM and transaction builder are not limited to predefined ActionType values. Any DeFi action a protocol adapter supports can be built and presented. The `CUSTOM` ActionType covers actions outside the predefined enum. |
 
 ### 6.3 Financial Guardrails
 

@@ -60,8 +60,8 @@ The backend does **not**:
 | **DEX** | Decentralized Exchange — a protocol for trading assets on-chain without a centralized intermediary. |
 | **Perp** | Perpetual futures contract — a derivative instrument with no expiration date, traded on exchanges like Aya Trade. |
 | **TVL** | Total Value Locked — the total value of assets deposited into a DeFi protocol. |
-| **Intent** | A classified user goal extracted from their natural language message (e.g., TRADE, MARKET_DATA, SETTINGS). |
-| **Tool** | A callable function that the LLM agent can invoke to retrieve data or perform actions (e.g., GetPriceTool, BuildTransactionTool). |
+| **Intent** | The user's goal as understood by the LLM from their natural language message. Not a separate classification step — the LLM infers intent natively by choosing which tools to call. |
+| **Tool (LLM Function-Calling Tool)** | A server-side function exposed to the LLM via the **function calling** / **tool use** protocol supported by all major LLM providers (Anthropic's tool use, OpenAI's function calling, Google's function declarations). The LLM receives a JSON Schema definition of each tool (name, description, parameters), decides when to invoke one, and the server executes the implementation and returns the result. This is the same mechanism Claude Code uses for its tools. Our tools are NOT MCP tools, CLI utilities, or internal helper classes — they are specifically LLM function-calling tools. |
 | **Protocol Adapter** | A module that knows how to construct transactions for a specific DeFi protocol (e.g., Uniswap V3, Lido, Jupiter). |
 | **Client-Side Execution** | The mobile app executes a pre-built function locally (Phase 1 model). The backend returns an action descriptor. |
 | **Server-Generated Transaction** | The backend constructs unsigned transaction(s) that the mobile presents for the user to sign with their key (Phase 2+ model). |
@@ -511,7 +511,7 @@ Note: `ConversationMeta` is metadata attached to responses for debugging/testing
 
 **ClientActionRequest** (templateId=20)
 
-Used in Phase 1 to instruct the mobile app to execute a pre-built function.
+Used in Phase 1 to instruct the mobile app to execute a pre-built function. Only predefined `ActionType` values are supported here (not CUSTOM) — the mobile must have a built-in handler for each type.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -689,7 +689,23 @@ Behavior:
     <validValue name="LEND">8</validValue>
     <validValue name="BORROW">9</validValue>
     <validValue name="EXCHANGE_ORDER">10</validValue>
+    <validValue name="CUSTOM">255</validValue>
 </enum>
+
+<!--
+  ActionType is a UI rendering hint, NOT a constraint on what the system can do.
+
+  Phase 1 (ClientActionRequest): The mobile maps predefined ActionTypes to built-in
+  functions. CUSTOM is not supported in Phase 1.
+
+  Phase 2+ (TransactionBundle): The mobile renders the human-readable description
+  field regardless of ActionType. CUSTOM covers any DeFi action the protocol adapters
+  support that doesn't fit the predefined list (e.g., add/remove liquidity, claim
+  rewards, vote, wrap/unwrap, claim airdrop, etc.).
+
+  The LLM and transaction builder are NOT limited to the predefined set. If a
+  protocol adapter supports an action, it can be built and presented to the user.
+-->
 
 <enum name="ChainId" encodingType="uint32">
     <validValue name="ETHEREUM">1</validValue>
@@ -1399,7 +1415,7 @@ Bitcoin transactions use the PSBT standard (BIP-174):
 public interface ProtocolAdapter {
     String protocolName();
     Set<ChainId> supportedChains();
-    Set<ActionType> supportedActions();
+    Set<String> supportedActions();  // Free-form: "swap", "stake", "add_liquidity", etc.
 
     /**
      * Returns contract addresses used by this protocol on the given chain.
@@ -1581,14 +1597,36 @@ See [Section 12](#12-aya-trade-exchange-integration) for full details. Within th
 
 ## 8. Tool System
 
-### 8.1 Tool Interface & Registry
+### 8.1 What Are Tools?
+
+Tools in this system are **LLM function-calling tools** — the same mechanism used by:
+- **Anthropic Claude**: [Tool Use](https://docs.anthropic.com/en/docs/build-with-claude/tool-use) — the LLM receives tool definitions and produces `tool_use` content blocks
+- **OpenAI**: [Function Calling](https://platform.openai.com/docs/guides/function-calling) — the LLM receives `tools` array and produces `tool_calls`
+- **Google Gemini**: [Function Declarations](https://ai.google.dev/gemini-api/docs/function-calling) — same concept
+
+**How it works in Aya:**
+
+1. At the start of each LLM call, the server sends **all tool definitions** as part of the request. Each definition includes a `name`, `description`, and `parameters` JSON Schema.
+2. The LLM reads the user's message, conversation history, and available tools. It decides — on its own — whether to call a tool, which tool to call, and with what parameters.
+3. The server receives the tool call request, executes the corresponding Java implementation, and returns the result to the LLM.
+4. The LLM may call more tools (agentic loop) or produce a final text response.
+
+This is identical to how Claude Code's tools work — the LLM is the decision-maker, and tools are capabilities the server exposes for it to use.
+
+**Tools are NOT:**
+- MCP (Model Context Protocol) tools — though the architecture could be extended to support MCP in the future
+- CLI commands or shell utilities
+- Internal Java helper methods or utility classes
+- Mobile-side functions (those are invoked via `ClientActionRequest`, which is a different mechanism)
+
+### 8.2 Tool Interface & Registry
 
 ```java
 public interface Tool {
-    String name();                  // Used in LLM tool calling (e.g., "get_price")
-    String description();           // Human-readable, included in LLM tool definition
-    JsonSchema parametersSchema();  // JSON Schema — the LLM sees this to know what params to pass
-    JsonSchema resultSchema();      // Structure of the result
+    String name();                  // LLM function name (e.g., "get_price")
+    String description();           // Included in the LLM tool definition — tells the LLM when to use this tool
+    JsonSchema parametersSchema();  // JSON Schema for the tool's parameters — the LLM generates valid params from this
+    JsonSchema resultSchema();      // Structure of the result returned to the LLM
 
     ToolResult execute(Map<String, Object> parameters, ToolContext context)
         throws ToolExecutionException;
@@ -1601,7 +1639,7 @@ public interface Tool {
 
 The `ToolRegistry` holds all available tools and provides lookup by name. At the start of each LLM call, the registry generates the tool definitions array that the LLM uses for function calling. The LLM decides which tools to call and with what parameters — we do not pre-select tools based on intent.
 
-### 8.2 Market Data Tools
+### 8.3 Market Data Tools
 
 **GetPriceTool**
 - Parameters: `symbol` (required), `chainId` (optional), `currency` (optional, default USD)
@@ -1649,7 +1687,7 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
    and go directly to Free (avoids wasting latency on a known-down endpoint)
 ```
 
-### 8.3 Portfolio Analysis Tools
+### 8.4 Portfolio Analysis Tools
 
 **AnalyzePortfolioTool**
 - Parameters: none (uses portfolio from request metadata)
@@ -1661,7 +1699,7 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 - Source: portfolio metadata (Phase 1), RPC verification (Phase 2+)
 - Returns: balance, USD value
 
-### 8.4 Settings Management Tools
+### 8.5 Settings Management Tools
 
 **ChangeSettingTool**
 - Parameters: `key`, `value`
@@ -1669,7 +1707,7 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 - Validation: checks that value is in allowed range (e.g., slippage 0.01-50%)
 - Returns: `SettingsChangeRequest` SBE message
 
-### 8.5 Trading Strategy Tool
+### 8.6 Trading Strategy Tool
 
 **GenerateStrategyTool** (`generate_strategy`)
 - Parameters: `query` (user's question), `portfolioSummary` (from AnalyzePortfolioTool), `marketContext` (from GetPriceTool/GetMarketOverviewTool)
@@ -1677,16 +1715,18 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 - Returns: `TradingStrategyResponse` SBE message with `strategyText`, `confidence` (LOW/MEDIUM/HIGH), `disclaimer`, and `suggestedActions` repeating group
 - The mobile renders this as a structured strategy card with confidence badge and actionable step buttons
 
-### 8.6 Transaction & Action Tools
+### 8.7 Transaction & Action Tools
 
 **BuildTransactionTool** (`build_transaction`)
-- Parameters: `action` (SWAP, STAKE, UNSTAKE, BRIDGE, LEND, BORROW, TRANSFER), `fromAsset` (symbol), `toAsset` (symbol, optional), `amount` (decimal string), `chainId`, `protocol` (optional — if omitted, best protocol is selected), `slippage` (optional, default 0.5%)
+- Parameters: `action` (string — e.g., "swap", "stake", "unstake", "bridge", "lend", "borrow", "transfer", "add_liquidity", "remove_liquidity", "claim_rewards", or any action the protocol adapters support), `fromAsset` (symbol), `toAsset` (symbol, optional), `amount` (decimal string), `chainId`, `protocol` (optional — if omitted, best protocol is selected), `slippage` (optional, default 0.5%)
 - Returns: `TransactionBundle` SBE message with unsigned transaction(s)
 - Internally calls the Transaction Construction Pipeline (Section 7.8)
+- **Not limited to predefined ActionType values.** The `action` parameter is a free-form string that the protocol adapter interprets. The resulting `TransactionBundle` uses a predefined `ActionType` if one matches, or `CUSTOM` for actions outside the enum. The mobile renders the human-readable `description` field regardless.
 
 **BuildClientActionTool** (`build_client_action`) — Phase 1 only
-- Parameters: `actionType` (SWAP, BRIDGE, SETTINGS_CHANGE), `parameters` (key-value map matching the mobile's expected parameters)
+- Parameters: `actionType` (SWAP, BRIDGE, STAKE, UNSTAKE, TRANSFER, SETTINGS_CHANGE — predefined only, no CUSTOM), `parameters` (key-value map matching the mobile's expected parameters)
 - Returns: `ClientActionRequest` SBE message
+- Limited to actions the mobile has built-in handlers for
 - Used when the mobile app has a built-in function for the action
 
 **CheckAyaTradeTool** (`check_aya_trade`)
@@ -1694,7 +1734,7 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 - Returns: `{ available: boolean, pair: string, bestBid: string, bestAsk: string, spread: string }` — included in the LLM's context so it can recommend Aya Trade
 - The system prompt instructs the LLM to call this before any trade to check Aya Trade availability
 
-### 8.6 Tool Result Caching
+### 8.8 Tool Result Caching
 
 | Tool | Cache TTL | Storage |
 |------|-----------|---------|
