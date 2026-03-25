@@ -184,6 +184,32 @@ No exceptions. If you can't write a test for it, you don't understand the bug we
 
 For adversarial bugs (prompt injection bypasses, etc.), add the reproduction to the `@adversarial` test suite. For protocol bugs, add an SBE round-trip test. For transaction builder bugs, add a simulation test.
 
+## 9. Branch Naming
+
+Format: `category/description`
+
+| Category | Use |
+|----------|-----|
+| `feat/` | New feature |
+| `fix/` | Bug fix |
+| `refactor/` | Code restructuring, no behavior change |
+| `docs/` | Documentation only |
+| `test/` | Test additions or fixes |
+| `chore/` | Build, config, dependencies |
+
+Description is lowercase, hyphen-separated, short.
+
+```
+feat/yield-discovery
+fix/psbt-fee-estimation
+refactor/sbe-codec-buffer-reuse
+docs/adr-streaming-protocol
+test/adversarial-prompt-injection
+chore/upgrade-netty
+```
+
+`main` is the default branch. No `develop` branch. Feature branches merge to `main` via PR.
+
 ---
 
 ## Summary
@@ -198,3 +224,4 @@ For adversarial bugs (prompt injection bypasses, etc.), add the reproduction to 
 | SnakeYAML config | One format everywhere |
 | ADRs | Large changes get a decision record |
 | No bugfix without tests | Reproduce → fix → regression test |
+| Branch naming | `category/description` (feat/, fix/, refactor/, docs/, test/, chore/) |
