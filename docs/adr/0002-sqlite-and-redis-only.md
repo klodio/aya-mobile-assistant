@@ -1,18 +1,22 @@
-# ADR-0002: SQLite + Redis as Only Storage
+# ADR-0002: SQLite + In-Memory State (Optional Redis)
 
 **Date**: 2026-03-24
-**Status**: Accepted
+**Status**: Accepted (supersedes original "SQLite + Redis as Only Storage")
 
 ## Context
 
-The backend needs persistent storage (ABI/IDL cache, conversation history, token registry) and ephemeral storage (session state, rate limiting, caching). Options: PostgreSQL, MySQL, MongoDB, or simpler alternatives.
+The backend needs persistent storage (ABI/IDL cache, conversation history, token registry) and ephemeral storage (session state, rate limiting, caching). The original design required Redis as the only external service. However, requiring Redis adds operational overhead for simple deployments (single instance, development, testing) where in-memory state is sufficient.
 
 ## Decision
 
-Use SQLite (embedded) for all persistent data and Redis (managed externally) as the only external service. No Docker, no external database servers.
+Use SQLite (embedded) for all persistent data and an in-memory StateStore by default for ephemeral state. Redis is an **optional** backend for the StateStore, enabled via `state.backend: redis`, intended for horizontal scaling where shared state across instances is needed.
+
+- **Default** (`state.backend: memory`): Zero external dependencies. Session state, rate limiting, and caching live in-process using `ConcurrentHashMap` with TTL-based eviction. Suitable for single-instance deployments.
+- **Optional** (`state.backend: redis`): Redis provides shared session state, rate limiting, and caching across multiple instances. Required only when running multiple backend instances behind a load balancer.
 
 ## Consequences
 
-- **Positive**: Zero-config SQLite (created on first run), single fat JAR deployment, no database server to manage, Redis is the only external dependency and can be managed/hosted.
-- **Negative**: SQLite is per-instance (not shared across horizontal instances) — mitigated by Redis for shared state and the fact that SQLite data (ABI cache) is safe to duplicate. Write concurrency is limited in SQLite — mitigated by WAL mode and the fact that writes are infrequent.
-- **Neutral**: Horizontal scaling works via shared Redis; SQLite acts as a local cache per instance.
+- **Positive**: Zero-config deployment — `java -jar aya-backend.jar` works with no external services. SQLite is created on first run. Development and testing require no infrastructure setup. Single-instance production deployments need only a JDK.
+- **Positive**: Horizontal scaling is still fully supported by opting into Redis via a single config flag.
+- **Negative**: In-memory state is lost on restart (mitigated by SQLite persistence for conversation history; sessions expire after 24h regardless). With the in-memory backend, sticky sessions are required for multi-instance setups (or just use Redis).
+- **Neutral**: The StateStore abstraction adds a thin interface layer, but keeps the rest of the codebase unaware of the backing implementation.

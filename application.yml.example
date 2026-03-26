@@ -10,9 +10,14 @@ server:
   requestTimeoutMs: 30000
   maxPayloadBytes: 1048576
 
-redis:
-  url: redis://localhost:6379
-  poolSize: 16
+# --- State Backend ---
+state:
+  backend: memory                    # 'memory' (default, zero deps) or 'redis' (for horizontal scaling)
+
+# --- Redis (only used if state.backend is 'redis') ---
+# redis:
+#   url: redis://localhost:6379
+#   poolSize: 16
 
 sqlite:
   path: ./aya.db

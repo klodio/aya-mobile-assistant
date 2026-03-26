@@ -464,7 +464,7 @@ It serves as:
 ### 4.5 Concurrent Requests — Same Session
 
 **Trigger**: Two requests arrive simultaneously for the same sessionId.
-**Expected**: The system processes them sequentially (Redis-based session lock) to prevent race conditions in conversation state.
+**Expected**: The system processes them sequentially (state store session lock, in-memory by default) to prevent race conditions in conversation state.
 **Rationale**: Concurrent writes to session state could corrupt conversation history or create conflicting actions.
 
 ### 4.6 Long Conversations — Context Overflow
@@ -532,7 +532,7 @@ It serves as:
 |--------|--------|
 | Uptime | 99.9% |
 | Planned maintenance window | <1 hour/month |
-| Recovery time from failure | <5 minutes (restart JAR + reconnect Redis) |
+| Recovery time from failure | <5 minutes (restart JAR; reconnect Redis if configured) |
 
 ### 5.4 Model Routing Speed
 

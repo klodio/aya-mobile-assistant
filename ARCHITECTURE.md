@@ -28,8 +28,8 @@ This document provides a visual and structural overview of the Aya backend syste
 Aya is built around four principles:
 
 1. **Self-contained**: A single fat JAR with embedded SQLite. No Docker, no external database servers, no container orchestration.
-2. **Minimal dependencies**: Redis is the only external service. Everything else is embedded or ephemeral.
-3. **Easy to deploy**: `java -jar aya-backend.jar` on any machine with JDK 21+ and a Redis connection.
+2. **Minimal dependencies**: Zero external dependencies by default. Redis is optional for horizontal scaling.
+3. **Easy to deploy**: `java -jar aya-backend.jar` on any machine with JDK 21+. No external services required.
 4. **Progressive capability**: Phase 1 leverages the mobile's existing functions; Phase 2+ shifts execution to server-generated transactions, upgrading capability without app store releases.
 
 ### System Constraints
@@ -39,7 +39,7 @@ Aya is built around four principles:
 | Non-custodial | No key storage. All signing happens on mobile. Server only produces unsigned transactions. |
 | No user accounts | Public key = identity. No auth database, no sessions tied to accounts. |
 | SBE protocol | Binary codec at the API boundary. No JSON serialization layer. |
-| SQLite + Redis only | No ORM, no migration framework. Simple SQL with embedded driver. |
+| SQLite + in-memory state (Redis optional) | No ORM, no migration framework. Simple SQL with embedded driver. |
 | Multi-chain | Pluggable chain adapters. Common interface for EVM, Solana, Bitcoin. |
 | Topic-restricted | Guardrails are part of the agent pipeline, not a separate service. |
 
@@ -65,16 +65,16 @@ C4Context
     System_Ext(rpc, "Blockchain RPCs", "EVM, Solana, Bitcoin nodes")
     System_Ext(ayatrade, "Aya Trade", "Own DEX — spot, perps, commodities")
     System_Ext(explorers, "Block Explorers", "Etherscan, Polygonscan, etc. — ABI sources")
-    System_Ext(redis, "Redis", "Managed Redis instance")
+    System_Ext(redis, "Redis (optional)", "Only for horizontal scaling — not required by default")
 
     Rel(user, mobile, "Uses")
     Rel(mobile, aya, "HTTP + SBE", "Binary payloads")
-    Rel(aya, llm, "HTTPS", "Intent classification, response generation")
+    Rel(aya, llm, "HTTPS", "LLM calls, tool use")
     Rel(aya, market, "HTTPS", "Price, TVL, market data")
     Rel(aya, rpc, "HTTPS/WSS", "Tx simulation, fee estimation, balance checks")
     Rel(aya, ayatrade, "SBE over HTTPS", "Trading, market data")
     Rel(aya, explorers, "HTTPS", "ABI/contract verification")
-    Rel(aya, redis, "TCP", "Session state, rate limiting, caching")
+    Rel(aya, redis, "TCP (if configured)", "Shared state for multi-instance")
 ```
 
 ### 2.2 C4 Container Diagram
@@ -93,9 +93,10 @@ C4Container
         Container(exchange, "Aya Trade Client", "Java", "Exchange API integration, priority routing")
         Container(security, "Security Module", "Java", "Signature verification, input sanitization, prompt injection defense")
         ContainerDb(sqlite, "SQLite", "Embedded DB", "Protocol index, ABI/IDL cache, conversation history, token registry")
+        ContainerDb(statestore, "StateStore", "In-memory (default) or Redis", "Session state, rate limiting, tool result cache")
     }
 
-    System_Ext(redis, "Redis", "Session state, rate limiting, pub/sub")
+    System_Ext(redis, "Redis (optional)", "Only if state.backend=redis for horizontal scaling")
     System_Ext(llm, "LLM Providers", "Multi-provider")
     System_Ext(rpc, "Blockchain RPCs", "EVM, Solana, Bitcoin")
     System_Ext(market, "Market Data APIs", "CoinGecko, DeFiLlama")
@@ -103,12 +104,13 @@ C4Container
 
     Rel(api, agent, "Decoded request")
     Rel(api, security, "Auth check")
-    Rel(api, redis, "Rate limiting")
+    Rel(api, statestore, "Rate limiting")
     Rel(agent, tools, "Tool dispatch")
     Rel(agent, txbuild, "Transaction requests")
     Rel(agent, exchange, "Exchange queries")
     Rel(agent, llm, "LLM calls")
-    Rel(agent, redis, "Session load/save")
+    Rel(agent, statestore, "Session load/save")
+    Rel(statestore, redis, "If configured", "optional")
     Rel(tools, market, "Market data fetch")
     Rel(txbuild, rpc, "Simulation, fee estimation")
     Rel(txbuild, sqlite, "ABI/IDL cache")
@@ -124,7 +126,7 @@ graph TB
         HTTP[HTTP Server<br/>Netty]
         CODEC[SBE Codec<br/>Encode/Decode]
         AUTH[Auth Verifier<br/>ECDSA secp256k1]
-        RATE[Rate Limiter<br/>Redis-backed sliding window]
+        RATE[Rate Limiter<br/>In-memory (Redis optional)]
         ROUTER[Request Router<br/>Dispatches to Agent Pipeline]
         HEALTH[Health Endpoint<br/>GET /health]
     end
@@ -162,7 +164,7 @@ graph TB
 
     EXECUTOR --> TOOLS[Tool Layer]
     EXECUTOR --> TXBUILD[Transaction Builder]
-    CONVMGR --> REDIS[(Redis)]
+    CONVMGR --> STATESTORE[(StateStore)]
     CONVMGR --> SQLITE[(SQLite)]
     LLMCALL --> LLM[LLM Providers]
 ```
@@ -282,7 +284,7 @@ graph LR
 | **Responsibilities** | Netty-based HTTP server accepting POST with SBE body. Decode request. Verify signature. Check rate limit. Route to agent pipeline. Encode response. Serve health endpoint. WebSocket endpoint (Phase 2). |
 | **Key Interfaces** | `RequestHandler`, `ResponseWriter` |
 | **Dependencies** | `aya-protocol`, `aya-security`, `aya-agent` |
-| **External** | Redis (rate limiting) |
+| **External** | Redis (rate limiting, if configured) |
 
 #### aya-agent
 
@@ -292,7 +294,7 @@ graph LR
 | **Responsibilities** | Model tier selection (simple heuristic). LLM call management (system prompt, history, tools). Tool execution when requested by the LLM. Agentic loop (LLM → tools → LLM). Response encoding to SBE. Conversation state management (load, save, summarize). The LLM itself handles intent understanding, disambiguation, confirmation, disclaimers, and off-topic refusal. |
 | **Key Interfaces** | `AgentPipeline`, `ModelRouter`, `ToolExecutor`, `ResponseEncoder`, `ConversationManager` |
 | **Dependencies** | `aya-protocol`, `aya-tools`, `aya-txbuilder`, `aya-exchange` |
-| **External** | LLM providers, Redis (session state), SQLite (conversation history) |
+| **External** | LLM providers, StateStore (session state — in-memory or Redis if configured), SQLite (conversation history) |
 
 #### aya-tools
 
@@ -302,7 +304,7 @@ graph LR
 | **Responsibilities** | Market data retrieval and caching. Portfolio analysis. News aggregation. Settings change construction. Trading strategy generation. Token info lookup. |
 | **Key Interfaces** | `Tool`, `ToolRegistry` |
 | **Dependencies** | None (tools are self-contained) |
-| **External** | CoinGecko, DeFiLlama, news APIs, Redis (tool result cache) |
+| **External** | CoinGecko, DeFiLlama, news APIs, StateStore (tool result cache — in-memory or Redis if configured) |
 
 #### aya-txbuilder
 
@@ -480,45 +482,45 @@ sequenceDiagram
     participant User as User
     participant Server as Server
     participant LLM as LLM
-    participant Redis as Redis
+    participant Store as StateStore
 
-    Note over User,Redis: Turn 1 — Ambiguous request
+    Note over User,Store: Turn 1 — Ambiguous request
 
     User->>Server: "Buy USDC" (no sessionId)
     Server->>Server: Generate sessionId
     Server->>LLM: system prompt + "Buy USDC" + tools
     LLM-->>Server: "USDC exists on multiple chains. Which do you prefer?"
     Note right of LLM: LLM naturally disambiguates.<br/>No state machine needed.
-    Server->>Redis: Save turn
+    Server->>Store: Save turn
     Server->>User: "USDC exists on multiple chains..."
 
-    Note over User,Redis: Turn 2 — User clarifies
+    Note over User,Store: Turn 2 — User clarifies
 
     User->>Server: "Polygon, 100 dollars worth"
-    Server->>Redis: Load history (Turn 1)
+    Server->>Store: Load history (Turn 1)
     Server->>LLM: history + "Polygon, 100 dollars worth" + tools
     LLM->>LLM: Calls get_price(USDC, Polygon), check_aya_trade(USDC/ETH)
     LLM-->>Server: "I'll buy ~100 USDC on Polygon. Fee: ~0.01 POL. Proceed?"
     Note right of LLM: LLM naturally confirms.<br/>No state machine needed.
-    Server->>Redis: Save turn
+    Server->>Store: Save turn
     Server->>User: "I'll buy ~100 USDC on Polygon..."
 
-    Note over User,Redis: Turn 3 — User confirms
+    Note over User,Store: Turn 3 — User confirms
 
     User->>Server: "Yes"
-    Server->>Redis: Load history (Turns 1-2)
+    Server->>Store: Load history (Turns 1-2)
     Server->>LLM: history + "Yes" + tools
     LLM->>LLM: Calls build_transaction(...)
     LLM-->>Server: "Done! Here's the transaction to sign." + TransactionBundle
-    Server->>Redis: Save turn
+    Server->>Store: Save turn
     Server->>User: TransactionBundle
 
-    Note over User,Redis: Context summarization (after 20+ turns)
+    Note over User,Store: Context summarization (after 20+ turns)
 
-    Server->>Redis: Load turns
+    Server->>Store: Load turns
     Server->>LLM: "Summarize this conversation"
     LLM-->>Server: Summary
-    Server->>Redis: Replace old turns with summary, keep last 10
+    Server->>Store: Replace old turns with summary, keep last 10
 ```
 
 ---
@@ -623,7 +625,9 @@ CREATE TABLE market_data_cache (
 );
 ```
 
-### 5.2 Redis Key Patterns
+### 5.2 StateStore Cache Patterns
+
+These patterns apply to the StateStore abstraction. With the default in-memory backend, keys live in a `ConcurrentHashMap` with TTL-based eviction. When `state.backend: redis` is configured, they map to Redis keys.
 
 | Pattern | Purpose | TTL |
 |---------|---------|-----|
@@ -640,13 +644,13 @@ CREATE TABLE market_data_cache (
 | Protocol registry | SQLite | Pre-populated seed, queryable by LLM tools, read-heavy |
 | Protocol contracts | SQLite | Maps protocols to addresses, bundled with seed |
 | ABI/IDL cache | SQLite | Bundled seed + on-demand fetch, read-heavy |
-| Conversation history | SQLite + Redis | Recent turns in Redis (fast), full history in SQLite (persistent) |
-| Session state | Redis | Ephemeral, needs fast access, shared across instances |
-| Rate limiting | Redis | Shared across instances, atomic operations, auto-expiry |
+| Conversation history | SQLite + StateStore | Recent turns in StateStore (in-memory or Redis), full history in SQLite (persistent) |
+| Session state | StateStore (in-memory or Redis) | Ephemeral, needs fast access. Redis backend enables cross-instance sharing. |
+| Rate limiting | StateStore (in-memory or Redis) | In-memory by default. Redis backend enables shared limits across instances. |
 | Token registry | SQLite | Persistent reference data, read-heavy |
 | Contract blacklist | SQLite | Persistent, rarely written, frequently read |
-| Tool result cache | Redis | Short-lived, shared across instances |
-| Live APY/TVL | Redis | Cached from DeFiLlama, short TTL (5 min), augments seed data |
+| Tool result cache | StateStore (in-memory or Redis) | Short-lived. Redis backend enables sharing across instances. |
+| Live APY/TVL | StateStore (in-memory or Redis) | Cached from DeFiLlama, short TTL (5 min), augments seed data |
 
 ---
 
@@ -670,21 +674,22 @@ Built via Gradle Shadow plugin (or Spring Boot's bootJar):
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | JDK | 21+ | Eclipse Temurin, GraalVM, or any OpenJDK distribution |
-| Redis | 6+ | Local `redis-server` or managed (AWS ElastiCache, Redis Cloud, etc.) |
+| Redis | 6+ (optional) | Only needed if `state.backend: redis` for horizontal scaling |
 
-**Not required**: Docker, PostgreSQL, Kubernetes, or any other infrastructure.
+**Not required**: Docker, PostgreSQL, Redis (unless scaling horizontally), Kubernetes, or any other infrastructure.
 
 ### 6.3 Running
 
 ```bash
-# Minimal
-export REDIS_URL=redis://localhost:6379
+# Minimal (in-memory state, zero external deps)
 java -jar aya-backend.jar
+
+# With Redis for horizontal scaling
+# java -jar aya-backend.jar --state.backend=redis --redis.url=redis://localhost:6379
 
 # With all configuration
 java -jar aya-backend.jar \
   --server.port=8080 \
-  --redis.url=redis://redis.internal:6379 \
   --llm.providers.0.apiKey=sk-ant-... \
   --llm.providers.1.apiKey=sk-... \
   --coingecko.pro.apiKey=CG-... \
@@ -698,7 +703,7 @@ java -jar aya-backend.jar \
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `PORT` | 8080 | HTTP server port |
-| `REDIS_URL` | redis://localhost:6379 | Redis connection URL |
+| `REDIS_URL` | redis://localhost:6379 | Redis connection URL (only used if `state.backend=redis`) |
 | `SQLITE_PATH` | ./aya.db | SQLite database file path |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
 | `OPENAI_API_KEY` | — | OpenAI API key |
@@ -721,7 +726,7 @@ graph TB
     LB --> I2[Instance 2<br/>aya-backend.jar]
     LB --> I3[Instance 3<br/>aya-backend.jar]
 
-    I1 --> REDIS[(Redis<br/>Shared session state)]
+    I1 --> REDIS[(Redis<br/>Shared session state<br/>when state.backend=redis)]
     I2 --> REDIS
     I3 --> REDIS
 
@@ -730,9 +735,9 @@ graph TB
     I3 --> S3[(SQLite 3<br/>Local cache)]
 ```
 
-- **Redis**: Shared across all instances for session state, rate limiting, and caching.
-- **SQLite**: Per-instance. ABI/IDL caches are read-heavy and safe to duplicate. Conversation history is written to both Redis and SQLite; SQLite is per-instance but Redis ensures cross-instance session continuity.
-- **Sticky sessions**: Not required. Any instance can serve any request because session state is in Redis.
+- **Redis** (required for multi-instance): When `state.backend: redis` is configured, Redis is shared across all instances for session state, rate limiting, and caching.
+- **SQLite**: Per-instance. ABI/IDL caches are read-heavy and safe to duplicate. Conversation history is written to both StateStore and SQLite; SQLite is per-instance but Redis (when configured) ensures cross-instance session continuity.
+- **Sticky sessions**: Not required when using Redis backend. Any instance can serve any request because session state is in Redis. With the default in-memory backend, sticky sessions are required or a single instance must be used.
 
 ### 6.6 Health Endpoint
 
@@ -744,7 +749,7 @@ Response (200 OK):
 ```json
 {
   "status": "healthy",
-  "redis": "connected",
+  "state_backend": "memory",
   "sqlite": "ok",
   "llm_providers": {
     "anthropic": "available",
@@ -754,7 +759,7 @@ Response (200 OK):
 }
 ```
 
-Returns 503 if Redis is unreachable or all LLM providers are down.
+Returns 503 if all LLM providers are down (or Redis is unreachable when `state.backend: redis`).
 
 ---
 
@@ -774,7 +779,7 @@ graph LR
             I1[Instance 1]
             I2[Instance 2]
         end
-        REDIS[(Redis)]
+        REDIS[(Redis<br/>optional)]
     end
 
     subgraph "External Services"
@@ -792,8 +797,8 @@ graph LR
     MOBILE -->|HTTPS + SBE| LB
     LB --> I1
     LB --> I2
-    I1 --> REDIS
-    I2 --> REDIS
+    I1 -.->|if configured| REDIS
+    I2 -.->|if configured| REDIS
 
     I1 -->|HTTPS| LLM_A
     I1 -->|HTTPS| LLM_O
@@ -816,7 +821,7 @@ graph LR
 | Backend → Blockchain RPCs | HTTPS or WSS | JSON-RPC | Per-chain connection pool |
 | Backend → Block explorers | HTTPS | JSON | Rate-limited by explorer |
 | Backend → Aya Trade | HTTPS | SBE binary | Same encoding as our protocol |
-| Backend ↔ Redis | TCP | RESP protocol | Connection pooled (16 connections default) |
+| Backend ↔ Redis (if configured) | TCP | RESP protocol | Connection pooled (16 connections default) |
 
 ### 7.3 Connection Pooling
 
@@ -825,7 +830,7 @@ graph LR
 | LLM providers | 10 per provider | Yes | Reuses connections for sequential model calls |
 | Blockchain RPCs | 5 per chain | Yes | WebSocket for subscription data (Phase 2+) |
 | Market APIs | 5 per API | Yes | Short-lived requests, cached results |
-| Redis | 16 | Yes | Jedis or Lettuce pool |
+| Redis (if configured) | 16 | Yes | Jedis or Lettuce pool |
 | SQLite | 1 | N/A | Single connection, WAL mode for concurrent reads |
 
 ---
@@ -866,7 +871,7 @@ sequenceDiagram
 | **Replay attack** | Attacker resends captured requests | Medium | Timestamp freshness check (±5 min window) |
 | **Portfolio spoofing** | User claims false balances | Medium | RPC balance verification for transactions (Phase 2+) |
 | **Scam contract interaction** | User tricked into signing malicious transaction | Medium | Contract blacklist, unverified contract warnings, simulation |
-| **Rate limit abuse** | DoS via excessive requests | High | Per-key and global rate limiting via Redis |
+| **Rate limit abuse** | DoS via excessive requests | High | Per-key and global rate limiting via StateStore (in-memory or Redis) |
 | **Data exfiltration** | Internal details leaked in responses | Low | Output validation, no stack traces, generic error messages |
 | **Man-in-the-middle** | Payload tampered in transit | Low | TLS at load balancer, SBE payload signed by user |
 

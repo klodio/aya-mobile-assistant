@@ -24,7 +24,7 @@ graph TB
 
     subgraph Storage
         SQLITE[(SQLite<br/>Protocol Index, ABIs,<br/>Conversations)]
-        REDIS[(Redis<br/>Sessions, Cache)]
+        STATE[(State Store<br/>In-memory default<br/>Redis optional)]
     end
 
     subgraph External
@@ -46,9 +46,9 @@ graph TB
     TXBUILD --> MARKET
     EXCHANGE --> AYATRADE
     AGENT --> LLM
-    API --> REDIS
+    API --> STATE
     TXBUILD --> SQLITE
-    AGENT --> REDIS
+    AGENT --> STATE
 ```
 
 For detailed architecture diagrams (C4 context, container, component), data flows, and deployment topology, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -63,7 +63,7 @@ For detailed architecture diagrams (C4 context, container, component), data flow
 | Protocol | SBE (Simple Binary Encoding) over HTTP |
 | Streaming | WebSocket + SBE frames (Phase 2) |
 | Local Storage | SQLite (embedded, zero-config) |
-| External Service | Redis (managed, only external dependency) |
+| External Service | None by default. Redis optional for horizontal scaling. |
 | LLM | Multi-provider: fast models for routing, powerful models for reasoning |
 | Chains | EVM (Ethereum, Polygon, Arbitrum, Optimism, Base, BSC, Avalanche), Solana, Bitcoin |
 | BDD | Cucumber + Gherkin |
@@ -93,9 +93,9 @@ aya-backend/
 ### Prerequisites
 
 - **JDK 21+** (e.g., Eclipse Temurin, GraalVM)
-- **Redis** instance (local `redis-server` or managed)
+- **Redis** (optional — only needed for horizontal scaling)
 
-No Docker required. No external database.
+No Docker required. No external database. No external services required by default.
 
 ### Build
 
@@ -109,7 +109,7 @@ This compiles all modules, generates SBE codecs from the schema XML, and runs th
 
 ```bash
 # Set required environment variables
-export REDIS_URL=redis://localhost:6379
+# export REDIS_URL=redis://localhost:6379   # Optional — only if state.backend=redis
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 export COINGECKO_PRO_API_KEY=CG-...
@@ -179,4 +179,4 @@ The schema is at `aya-protocol/src/main/resources/sbe/aya-assistant.xml`. See [S
 | [AYA_INDEX_ARCHITECTURE.md](AYA_INDEX_ARCHITECTURE.md) | Protocol index tool architecture — component diagram, data flows |
 | [AYA_INDEX_BEHAVIORS_AND_EXPECTATIONS.md](AYA_INDEX_BEHAVIORS_AND_EXPECTATIONS.md) | Protocol index tool behavioral contract |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Developer rules — no Docker, performance over inheritance, GC-favorable patterns, SnakeYAML config, ADRs, no bugfix without tests |
-| [docs/adr/](docs/adr/) | Architecture Decision Records — SBE over HTTP, SQLite+Redis, LLM-native design, fat JAR deployment, performance philosophy |
+| [docs/adr/](docs/adr/) | Architecture Decision Records — SBE over HTTP, SQLite + optional Redis, LLM-native design, fat JAR deployment, performance philosophy |

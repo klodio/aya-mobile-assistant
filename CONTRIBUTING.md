@@ -6,7 +6,7 @@ These rules are non-negotiable. Every contributor must follow them.
 
 ## 1. No Docker
 
-Aya deploys as a single fat JAR. No Dockerfiles, no docker-compose, no container orchestration. If you need the backend running, it's `java -jar aya-backend.jar`. If you need Redis, install it or use a managed instance. That's it.
+Aya deploys as a single fat JAR. No Dockerfiles, no docker-compose, no container orchestration. If you need the backend running, it's `java -jar aya-backend.jar`. No external services required by default. Redis is optional â€” only install it if you need horizontal scaling (`state.backend: redis`).
 
 ## 2. Performance Over Inheritance
 
@@ -98,8 +98,11 @@ No `.properties` files. No XML configuration (SBE schema XML is the exception â€
 server:
   port: 8080
 
-redis:
-  url: redis://localhost:6379
+state:
+  backend: memory                    # 'memory' (default) or 'redis' (for horizontal scaling)
+
+# redis:                             # Only needed if state.backend is 'redis'
+#   url: redis://localhost:6379
 
 llm:
   providers:

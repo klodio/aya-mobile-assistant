@@ -79,7 +79,7 @@ The backend does **not**:
 | **Topic-restricted** | The assistant only responds to blockchain, DeFi, crypto, finance, and market-related queries. |
 | **Financial disclaimer** | Every response containing financial data, suggestions, or trading information must include a disclaimer. |
 | **Aya Trade priority** | Whenever a trade can be executed on Aya Trade, it must be the preferred venue. |
-| **Minimal infrastructure** | Deployment is a single fat JAR. The only external dependency is a managed Redis instance. Local storage uses SQLite (embedded). |
+| **Minimal infrastructure** | Deployment is a single fat JAR. Zero external dependencies by default. Redis is optional — used only if configured for horizontal scaling. Default is in-memory + SQLite. |
 | **SBE protocol** | All client-server communication uses SBE-encoded binary payloads. No loose JSON at the API boundary. Exception: `GET /health` is a non-client admin endpoint that returns JSON for compatibility with standard monitoring tools. |
 | **LLM-native design** | The LLM is the orchestrator, not a component being orchestrated. Do not rebuild what LLMs do natively: conversation, disambiguation, language support, intent understanding, disclaimer generation, off-topic refusal. Only build what LLMs cannot do: protocol codecs, tool implementations, transaction construction, security, structured response encoding. |
 | **Polyglot** | The assistant responds in whatever language the user writes in. LLMs are naturally multilingual — no language restriction. |
@@ -125,10 +125,10 @@ The backend does **not**:
         |          |             |         |           |         |
         v          v             v         v           v         v
    +---------+ +--------+  +---------+ +-------+  +--------+ +-------+
-   | LLM     | | Market | | Block   | | Redis | | SQLite | | Aya   |
-   |Providers| | Data   | | chain   | |       | |        | | Trade |
-   |         | | APIs   | | RPCs    | |       | |        | | API   |
-   +---------+ +--------+  +---------+ +-------+  +--------+ +-------+
+   | LLM     | | Market | | Block   | | Redis      | | SQLite | | Aya   |
+   |Providers| | Data   | | chain   | |(optional)  | |        | | Trade |
+   |         | | APIs   | | RPCs    | |            | |        | | API   |
+   +---------+ +--------+  +---------+ +------------+  +--------+ +-------+
 ```
 
 ### 2.2 Module Decomposition
@@ -153,8 +153,8 @@ A concrete example: the user sends **"Swap 100 USDC for ETH on Polygon"**.
 1. **HTTP Receive**: The server receives an HTTP POST with an SBE-encoded binary body.
 2. **SBE Decode**: The `AssistantRequest` envelope is decoded. Inner message type is `UserMessage`.
 3. **Auth**: The server verifies the request signature against the provided public key.
-4. **Rate Check**: Redis-backed rate limiter checks the public key's request count.
-5. **Conversation Load**: The `sessionId` is used to load conversation history from Redis (recent turns) and SQLite (older turns).
+4. **Rate Check**: Rate limiter (in-memory by default, Redis if configured) checks the public key's request count.
+5. **Conversation Load**: The `sessionId` is used to load conversation history from the state store (in-memory by default) and SQLite (older turns).
 6. **Model Tier Selection**: Simple heuristic — "Swap 100 USDC for ETH on Polygon" has no strategy/analysis keywords → Tier 1 (fast).
 7. **LLM Call**: The fast model receives the system prompt, conversation history, user message, portfolio metadata, and all tool definitions. The LLM decides what to do.
 8. **LLM Tool Calls**: The LLM calls `get_price` (ETH and USDC on Polygon), then `check_aya_trade` (USDC/ETH), then decides to present a plan to the user. If the user has already confirmed in a previous turn, the LLM calls `build_transaction`.
@@ -181,18 +181,19 @@ A concrete example: the user sends **"Swap 100 USDC for ETH on Polygon"**.
 - Contract blacklist: `(chain_id, contract_address, reason, added_at)`
 - Token registry: `(chain_id, contract_address, symbol, name, decimals, market_cap, verified)`
 
-**Redis** (external, managed):
-- Session state: ephemeral conversation context, active disambiguation state, pending confirmations
+**StateStore** (in-memory by default, optionally Redis):
+- Session state: ephemeral conversation context, active state, pending confirmations
 - Rate limiting: sliding window counters per public key
-- Pub/sub: streaming message delivery (Phase 2)
 - Tool result cache: short-TTL caching of market data API responses
+
+Default backend is `InMemoryStateStore` using `ConcurrentHashMap` with TTL-based eviction. Zero external dependencies. If `redis.url` is configured, `RedisStateStore` is used instead — required for horizontal scaling (shared state across instances) and streaming pub/sub (Phase 2).
 
 ### 2.5 Deployment Model
 
 - HTTP server: **Netty** (raw) — maximum performance and control, no framework overhead
 - Single fat JAR produced by Gradle Shadow plugin
 - Run: `java -jar aya-backend.jar`
-- Prerequisites: JDK 21+, Redis instance
+- Prerequisites: JDK 21+ (Redis optional, only for horizontal scaling)
 - SQLite database file created automatically on first run
 - Horizontal scaling: multiple instances share Redis for session state; SQLite is per-instance (ABI cache is read-heavy and duplicated safely)
 - Health endpoint: `GET /health` returns 200 with basic status
@@ -220,6 +221,11 @@ server:
   requestTimeoutMs: 30000             # Max request processing time
   maxPayloadBytes: 1048576            # Max request body size (1 MB)
 
+# --- State Backend (optional) ---
+state:
+  backend: memory                     # 'memory' (default) or 'redis'
+
+# --- Redis (only if state.backend is 'redis') ---
 redis:
   url: redis://localhost:6379         # Redis connection URL
   poolSize: 16                        # Connection pool size
@@ -1747,14 +1753,14 @@ The `ToolRegistry` holds all available tools and provides lookup by name. At the
 
 | Tool | Cache TTL | Storage |
 |------|-----------|---------|
-| GetPriceTool | 30s | Redis |
-| GetMarketOverviewTool | 60s | Redis |
-| GetTvlTool | 5 min | Redis |
-| GetNewsTool | 5 min | Redis |
-| GetTokenInfoTool | 1 hour | Redis |
+| GetPriceTool | 30s | StateStore (in-memory or Redis) |
+| GetMarketOverviewTool | 60s | StateStore (in-memory or Redis) |
+| GetTvlTool | 5 min | StateStore (in-memory or Redis) |
+| GetNewsTool | 5 min | StateStore (in-memory or Redis) |
+| GetTokenInfoTool | 1 hour | StateStore (in-memory or Redis) |
 | ABI/IDL lookups | 24 hours | SQLite + memory LRU |
 
-Redis keys are prefixed with `aya:cache:{toolName}:{paramHash}`.
+Cache keys are prefixed with `aya:cache:{toolName}:{paramHash}`.
 
 ---
 
@@ -1764,7 +1770,7 @@ Redis keys are prefixed with `aya:cache:{toolName}:{paramHash}`.
 
 - **Session**: A single conversation thread identified by `sessionId` (UUID v4)
 - **Creation**: First message without a `sessionId` creates a new session. Subsequent messages with the same `sessionId` continue the conversation.
-- **Expiry**: Sessions expire after 24 hours of inactivity (configurable). Redis TTL handles automatic cleanup.
+- **Expiry**: Sessions expire after 24 hours of inactivity (configurable). StateStore TTL handles automatic cleanup (in-memory eviction or Redis TTL).
 - **Identity**: Sessions are bound to a public key. A request with a different public key for an existing session is rejected.
 
 ### 9.2 Context Window Management
@@ -1795,7 +1801,7 @@ public record ConversationTurn(
 ) {}
 ```
 
-Turns are written to both Redis (fast access) and SQLite (persistence). On session load, Redis is checked first; if the session was evicted from Redis, it's recovered from SQLite.
+Turns are written to both the state store (in-memory by default, fast access) and SQLite (persistence). On session load, the state store is checked first; if the session was evicted, it's recovered from SQLite.
 
 ### 9.4 LLM-Driven Conversation Flow
 
@@ -1907,7 +1913,7 @@ All incoming requests are validated:
 
 ### 11.4 Rate Limiting
 
-Redis-backed sliding window rate limiter:
+Sliding window rate limiter (in-memory by default, Redis-backed if configured):
 
 | Tier | Limit | Window |
 |------|-------|--------|
@@ -2088,14 +2094,14 @@ Rules for error messages:
 Layered caching to minimize external calls:
 
 1. **In-memory (JVM heap)**: Parsed ABIs/IDLs, token registry, frequently accessed data. LRU eviction.
-2. **Redis**: Tool results, session state, rate limiting counters. TTL-based eviction.
+2. **StateStore** (in-memory or Redis): Tool results, session state, rate limiting counters. TTL-based eviction.
 3. **SQLite**: Persistent cache of ABIs, IDLs, conversation history. No eviction.
 
 ### 14.3 Connection Pooling
 
 - **HTTP client** (for LLM providers, market APIs): Connection pool per host, keep-alive, configurable max connections
 - **RPC clients**: Connection pool per chain, WebSocket for subscription-based data (block headers, mempool)
-- **Redis**: Connection pool with configurable size (default: 16)
+- **Redis** (if configured): Connection pool with configurable size (default: 16)
 - **SQLite**: Single connection with WAL mode for concurrent reads
 
 ### 14.4 LLM Call Optimization
