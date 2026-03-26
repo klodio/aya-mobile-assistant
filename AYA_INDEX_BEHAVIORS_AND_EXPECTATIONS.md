@@ -32,9 +32,9 @@ The guiding principle: `aya-index` is a **data integrity tool**. It must be loud
 | Behavior | Description |
 |----------|-------------|
 | **Fetches all data** | For every protocol in `protocol_registry.yml`, fetches ABIs (EVM), IDLs (Solana), and metadata (TVL, APY) from external sources. No protocol is skipped. |
-| **Fails loudly on any ABI fetch failure** | If any block explorer API call fails (HTTP error, empty response, invalid JSON), the entire refresh aborts with a non-zero exit code and a clear error message identifying which contract on which chain failed. A broken seed must never be committed. |
-| **Fails loudly on any IDL fetch failure** | If an IDL cannot be found on-chain or via DeployDAO fallback, the refresh aborts. Missing IDLs are not acceptable. |
-| **Runs validate automatically** | After writing all files, `refresh` invokes `validate` internally. If validation fails, the refresh exits with a non-zero code even though the files were written. The developer sees both the fetch results and the validation errors. |
+| **Fails loudly on any ABI fetch failure** | If any block explorer API call fails (HTTP error, empty response, invalid JSON), the entire refresh aborts with a non-zero exit code and a clear error message identifying which contract on which chain failed. **No files are written** — the fetch phase collects all results in memory before any writes. |
+| **Fails loudly on any IDL fetch failure** | If an IDL cannot be found on-chain or via DeployDAO fallback, the refresh aborts. **No files are written.** |
+| **Two-phase execution** | Phase 1 (fetch): all ABIs, IDLs, and metadata are fetched into memory. If ANY fetch fails, abort — nothing is written to disk. Phase 2 (write + validate): only runs if all fetches succeeded. Files are written, then validate runs. If validate fails (e.g., coverage rules not met despite all fetches succeeding), files ARE on disk but the exit code is non-zero so the developer knows not to commit. |
 | **Overwrites existing files** | Running refresh on an existing seed directory updates all files. It does not preserve stale data. |
 | **Reports progress** | Prints progress to stdout as it fetches: which protocol, which chain, which contract. Long-running operations (many ABIs) should show incremental output, not silence for minutes. |
 | **Respects `--abis-only`** | When the flag is set, skips TVL/APY metadata fetching. Only fetches ABIs and IDLs. Does not modify `protocol_registry.yml` metadata fields (TVL, APY, timestamps). |

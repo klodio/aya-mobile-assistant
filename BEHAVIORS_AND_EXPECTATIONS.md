@@ -170,14 +170,14 @@ It serves as:
 #### B-2.4.1: Staking with Protocol Suggestion
 
 **Trigger**: "Stake my ETH" (no protocol specified).
-**Expected**: Aya suggests available staking protocols (Lido, Rocket Pool, etc.) with estimated APYs. Asks the user to choose.
+**Expected**: Aya suggests available staking protocols (Lido, Rocket Pool, etc.) with estimated APYs. Asks the user to choose. After confirmation, Phase 1 returns `ClientActionRequest` (STAKE); Phase 2+ returns `TransactionBundle`.
 **Rationale**: Users may not know which protocol to use. Presenting options with yields helps them decide.
 
 #### B-2.4.2: Staking with Explicit Protocol
 
 **Trigger**: "Stake 5 ETH via Lido."
-**Expected**: Aya uses Lido specifically without suggesting alternatives. Shows APY and builds the transaction.
-**Rationale**: When the user is specific, respect their choice.
+**Expected**: Aya uses Lido specifically without suggesting alternatives. Shows estimated APY and staking details. Phase 1: returns `ClientActionRequest` with actionType STAKE. Phase 2+: builds a server-generated `TransactionBundle`.
+**Rationale**: When the user is specific, respect their choice. The execution mechanism depends on the current phase.
 
 #### B-2.4.3: Bridge with Chain Selection
 

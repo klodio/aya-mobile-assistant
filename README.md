@@ -78,7 +78,7 @@ For detailed architecture diagrams (C4 context, container, component), data flow
 aya-backend/
   aya-protocol/          # SBE XML schemas, generated Java & TypeScript codecs
   aya-server/            # HTTP server, SBE codec, request routing, rate limiting
-  aya-agent/             # Agent pipeline: intent classification, model routing, response assembly
+  aya-agent/             # Agent pipeline: LLM orchestration, model routing, tool execution, response encoding
   aya-tools/             # Tool implementations (market data, portfolio, settings, strategy)
   aya-txbuilder/         # Transaction builder: ABI/IDL registries, protocol adapters, tx pipeline
   aya-exchange/          # Aya Trade exchange integration
@@ -160,7 +160,7 @@ The schema is at `aya-protocol/src/main/resources/sbe/aya-assistant.xml`. See [S
 
 | Phase | Scope | Key Features |
 |-------|-------|-------------|
-| **Phase 1 — Foundation** | Conversational assistant + client-side execution | SBE protocol, intent classification, market data tools, client-side execution (Uniswap swap, LiFi bridge), topic guardrails, disambiguation, security |
+| **Phase 1 — Foundation** | Conversational assistant + client-side execution | SBE protocol, LLM-native intent understanding via tool calling, market data tools, client-side execution (Uniswap swap, LiFi bridge), topic guardrails, disambiguation, security |
 | **Phase 2 — Server Transactions** | Transaction builder + streaming + Aya Trade | Server-generated transactions (EVM, Solana, Bitcoin), ABI/IDL scouting, streaming responses via WebSocket, Aya Trade spot trading, portfolio RPC validation |
 | **Phase 3 — Full Exchange** | Complete Aya Trade + advanced features | Aya Trade perps, commodities, limit/stop-loss orders, multi-session transaction tracking, Aya Trade as primary market data source |
 
@@ -171,7 +171,7 @@ The schema is at `aya-protocol/src/main/resources/sbe/aya-assistant.xml`. See [S
 | [SPEC.md](SPEC.md) | Exhaustive technical specification — system architecture, SBE protocol definition, agent pipeline, transaction builder, security model, and all other subsystems |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture with C4 diagrams, module decomposition, data flow diagrams, storage schemas, deployment model, and security architecture |
 | [BEHAVIORS_AND_EXPECTATIONS.md](BEHAVIORS_AND_EXPECTATIONS.md) | Behavioral contract — desired/undesired behaviors, edge cases, performance expectations, and guardrail definitions |
-| [features/](features/) | 24 BDD Gherkin feature files covering the backend (17 files + 1 health monitor) and CLI test client (6 files) |
+| [features/](features/) | 25 BDD Gherkin feature files — 18 backend, 6 CLI test client, 1 aya-index |
 | [CLI_CLIENT_SPEC.md](CLI_CLIENT_SPEC.md) | CLI test client specification — REPL, script mode, test harness, portfolio simulation |
 | [CLI_CLIENT_ARCHITECTURE.md](CLI_CLIENT_ARCHITECTURE.md) | CLI test client architecture — component diagram, data flows |
 | [CLI_CLIENT_BEHAVIORS_AND_EXPECTATIONS.md](CLI_CLIENT_BEHAVIORS_AND_EXPECTATIONS.md) | CLI test client behavioral contract |

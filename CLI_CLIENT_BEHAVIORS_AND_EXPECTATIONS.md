@@ -153,11 +153,13 @@ This document defines the behavioral contract for the Aya CLI Test Client (`aya-
 **Expected**: Messages go through real HTTP to the backend. Responses are real SBE-decoded objects. Assertions are chainable.
 **Rationale**: Integration tests must test the real protocol path.
 
-#### B-2.6.2: All BDD Tests Through HTTP
+#### B-2.6.2: Backend BDD Tests Through HTTP
 
-**Trigger**: Running `./gradlew cucumber`.
-**Expected**: Every BDD scenario sends real HTTP requests to a running backend. No mocking of the transport layer.
+**Trigger**: Running `./gradlew cucumber` for backend feature files.
+**Expected**: All backend BDD scenarios (conversation, trading, market data, etc.) send real HTTP requests to a running backend via the TestHarness. No mocking of the transport layer.
 **Rationale**: Maximum reliability. If it passes in BDD, it works over the wire.
+
+**Exception**: `aya_index.feature` and `protocol_health.feature` are offline tests that exercise the `aya-index` tool directly — they do not go through the backend or the TestHarness. They test seed management and protocol health monitoring, which are developer/CI workflows, not backend functionality.
 
 ### 2.7 Portfolio Simulation
 

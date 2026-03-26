@@ -80,7 +80,7 @@ The backend does **not**:
 | **Financial disclaimer** | Every response containing financial data, suggestions, or trading information must include a disclaimer. |
 | **Aya Trade priority** | Whenever a trade can be executed on Aya Trade, it must be the preferred venue. |
 | **Minimal infrastructure** | Deployment is a single fat JAR. The only external dependency is a managed Redis instance. Local storage uses SQLite (embedded). |
-| **SBE protocol** | All client-server communication uses SBE-encoded binary payloads. No loose JSON at the API boundary. |
+| **SBE protocol** | All client-server communication uses SBE-encoded binary payloads. No loose JSON at the API boundary. Exception: `GET /health` is a non-client admin endpoint that returns JSON for compatibility with standard monitoring tools. |
 | **LLM-native design** | The LLM is the orchestrator, not a component being orchestrated. Do not rebuild what LLMs do natively: conversation, disambiguation, language support, intent understanding, disclaimer generation, off-topic refusal. Only build what LLMs cannot do: protocol codecs, tool implementations, transaction construction, security, structured response encoding. |
 | **Polyglot** | The assistant responds in whatever language the user writes in. LLMs are naturally multilingual — no language restriction. |
 
@@ -204,7 +204,7 @@ A concrete example: the user sends **"Swap 100 USDC for ETH on Polygon"**.
 All configuration uses **SnakeYAML**. Every setting can be provided in three ways, in order of precedence:
 
 1. **Command-line arguments**: `--server.port=9090`, `--coingecko.pro.apiKey=CG-xxx` — highest priority, used for secrets in CI/deployment
-2. **Environment variables**: `SERVER_PORT=9090`, `COINGECKO_PRO_API_KEY=CG-xxx` — standard for container-less deployments and managed secrets
+2. **Environment variables**: `PORT=9090`, `COINGECKO_PRO_API_KEY=CG-xxx` — standard for container-less deployments and managed secrets
 3. **`application.yml`** file in the working directory — lowest priority, used for non-secret defaults
 
 Nested YAML keys map to dot-separated CLI args and underscore-separated env vars:
@@ -2247,7 +2247,7 @@ Using **JMH** for benchmarking:
 ### 16.7 BDD Tests (`@bdd`)
 
 Cucumber feature files (see `features/` directory):
-- 24 feature files covering all functional areas
+- 25 feature files covering all functional areas (18 backend, 6 CLI, 1 aya-index)
 - Tagged with `@phase1`, `@phase2`, `@phase3` for phase-specific execution
 - Step definitions in `aya-bdd/src/test/java/`
 - Can run subset: `./gradlew cucumber -Dcucumber.filter.tags="@phase1"` for fast BDD

@@ -938,7 +938,7 @@ The system employs a multi-layered approach:
 3. **Output validation**: After LLM generates a response, check for:
    - System prompt content appearing in the response
    - Model name or provider references
-   - Off-topic content that bypassed intent classification
+   - Off-topic content that bypassed the system prompt guardrails
    - Tool name or internal architecture details
 
 4. **Escalation**: If injection is detected, the response is discarded and a safe default is returned.
