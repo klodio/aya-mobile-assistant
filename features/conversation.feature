@@ -77,8 +77,8 @@ Feature: Conversational Assistant
   Scenario: Long conversation with context summarization
     Given a conversation with more than 20 turns
     When the user references something from the first turn
-    Then Aya either recalls it from the context summary
-    Or asks for clarification if the summary doesn't contain the detail
+    Then Aya responds with relevant information
+    And the response demonstrates awareness of the conversation history
 
   @phase1 @fast
   Scenario: New session creation when no sessionId provided

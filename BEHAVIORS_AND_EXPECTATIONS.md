@@ -469,7 +469,7 @@ It serves as:
 
 ### 4.6 Long Conversations — Context Overflow
 
-**Trigger**: Conversation exceeds 50+ turns.
+**Trigger**: Conversation exceeds 20+ turns.
 **Expected**: Older turns are summarized by the LLM. Last 10 turns are kept verbatim. The user can still reference recent topics. If a referenced topic is lost from the summary, Aya asks for clarification.
 **Rationale**: LLM context windows are finite. Summarization preserves the most important context.
 
@@ -587,6 +587,7 @@ It serves as:
 | **Sequential execution** | Multi-step transactions must be executed in order with confirmation between steps |
 | **Gas sanity check** | Warn if estimated gas is >10x typical for the operation |
 | **No action type limitation** | The LLM and transaction builder are not limited to predefined ActionType values. Any DeFi action a protocol adapter supports can be built and presented. The `CUSTOM` ActionType covers actions outside the predefined enum. |
+| **Curated protocol index** | Only build transactions for protocols in the curated protocol index (see SPEC Section 7.7.5). For unindexed protocols, only proceed if the user provides a contract address explicitly — trigger on-demand ABI fetch with an unverified contract warning. |
 
 ### 6.3 Financial Guardrails
 

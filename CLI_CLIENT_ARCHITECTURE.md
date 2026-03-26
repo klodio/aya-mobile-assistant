@@ -54,7 +54,7 @@ graph TB
         end
 
         subgraph "Test Support"
-            PORTFOLIO[Portfolio Simulator<br/>JSON profiles + overrides]
+            PORTFOLIO[Portfolio Simulator<br/>YAML profiles + overrides]
             HARNESS[Test Harness<br/>Java API for Cucumber/JUnit]
             ASSERT[Assertion Helpers<br/>Fluent response assertions]
         end

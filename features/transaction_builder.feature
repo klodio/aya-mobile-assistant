@@ -237,3 +237,26 @@ Feature: Transaction Builder System
     Then the chainId is 43114
     And the correct Avalanche RPC endpoint is used
     And Snowscan is queried for ABIs (not the defunct Snowtrace)
+
+  # --- Protocol Index Guardrail ---
+
+  @phase2 @fast
+  Scenario: Unindexed protocol requires explicit user confirmation
+    Given a protocol that is NOT in the curated protocol index
+    When the user asks to interact with it by contract address
+    Then the ABI is fetched on-demand from the block explorer
+    And Aya warns that the contract is not in the curated index
+    And asks for explicit confirmation before building the transaction
+
+  @phase2 @fast
+  Scenario: Unindexed protocol without contract address is declined
+    When the user asks "Stake my ETH on UnknownProtocolXYZ"
+    And "UnknownProtocolXYZ" is not in the protocol index
+    Then Aya explains the protocol is not supported
+    And suggests available alternatives from the index (e.g., Lido, Rocket Pool)
+
+  @phase1 @fast
+  Scenario: Bootstrap protocol set covers all chains
+    Then every supported chain has at least one DEX protocol in the index
+    And every supported chain has at least one staking or yield protocol
+    And every DeFiLlama category has at least 2 protocols

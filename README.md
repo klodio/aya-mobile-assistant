@@ -83,6 +83,7 @@ aya-backend/
   aya-txbuilder/         # Transaction builder: ABI/IDL registries, protocol adapters, tx pipeline
   aya-exchange/          # Aya Trade exchange integration
   aya-security/          # Authentication (public key signatures), input sanitization
+  aya-index/             # Offline seed data tool: fetch ABIs/IDLs, bootstrap protocol index
   aya-cli/               # CLI test client: REPL, script mode, integration test harness
   aya-bdd/               # Cucumber BDD feature files and step definitions (uses aya-cli TestHarness)
 ```
@@ -135,6 +136,7 @@ The server starts on port 8080 by default (configurable via `PORT` env var or `a
 ./gradlew testIntegration     # Real LLM + RPC + API integration tests
 ./gradlew testAdversarial     # Prompt injection and security tests
 ./gradlew testPerformance     # JMH benchmarks and latency tests
+./gradlew protocolHealth      # Protocol liveness, ABI validity, exploit checks (CI cron weekly)
 
 # BDD
 ./gradlew cucumber                                          # All feature files
@@ -169,9 +171,12 @@ The schema is at `aya-protocol/src/main/resources/sbe/aya-assistant.xml`. See [S
 | [SPEC.md](SPEC.md) | Exhaustive technical specification — system architecture, SBE protocol definition, agent pipeline, transaction builder, security model, and all other subsystems |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture with C4 diagrams, module decomposition, data flow diagrams, storage schemas, deployment model, and security architecture |
 | [BEHAVIORS_AND_EXPECTATIONS.md](BEHAVIORS_AND_EXPECTATIONS.md) | Behavioral contract — desired/undesired behaviors, edge cases, performance expectations, and guardrail definitions |
-| [features/](features/) | 22 BDD Gherkin feature files covering the backend (16 files) and CLI test client (6 files) |
+| [features/](features/) | 24 BDD Gherkin feature files covering the backend (17 files + 1 health monitor) and CLI test client (6 files) |
 | [CLI_CLIENT_SPEC.md](CLI_CLIENT_SPEC.md) | CLI test client specification — REPL, script mode, test harness, portfolio simulation |
 | [CLI_CLIENT_ARCHITECTURE.md](CLI_CLIENT_ARCHITECTURE.md) | CLI test client architecture — component diagram, data flows |
 | [CLI_CLIENT_BEHAVIORS_AND_EXPECTATIONS.md](CLI_CLIENT_BEHAVIORS_AND_EXPECTATIONS.md) | CLI test client behavioral contract |
+| [AYA_INDEX_SPEC.md](AYA_INDEX_SPEC.md) | Protocol index tool specification — seed management, audit, health monitoring, bootstrap set, addition criteria |
+| [AYA_INDEX_ARCHITECTURE.md](AYA_INDEX_ARCHITECTURE.md) | Protocol index tool architecture — component diagram, data flows |
+| [AYA_INDEX_BEHAVIORS_AND_EXPECTATIONS.md](AYA_INDEX_BEHAVIORS_AND_EXPECTATIONS.md) | Protocol index tool behavioral contract |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Developer rules — no Docker, performance over inheritance, GC-favorable patterns, SnakeYAML config, ADRs, no bugfix without tests |
 | [docs/adr/](docs/adr/) | Architecture Decision Records — SBE over HTTP, SQLite+Redis, LLM-native design, fat JAR deployment, performance philosophy |

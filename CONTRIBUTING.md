@@ -210,6 +210,26 @@ chore/upgrade-netty
 
 `main` is the default branch. No `develop` branch. Feature branches merge to `main` via PR.
 
+## 10. Protocol Addition
+
+New DeFi protocols can only be added to the protocol index if they meet **all** criteria:
+
+- Audited smart contracts (by a reputable firm)
+- Minimum $10M TVL
+- Verified source code on block explorers
+- No known unresolved exploits
+- Active development (commits within 6 months)
+- At least 3 months of mainnet operation
+
+**Tooling:**
+- Run `aya-index audit --protocol <name> --chain <chain>` to generate an automated due diligence report. Attach it to the ADR.
+- The `aya-index` tool fetches ABIs/IDLs and seed data. The developer writes the `ProtocolAdapter` Java class and tests. See [AYA_INDEX_SPEC.md Section 11](AYA_INDEX_SPEC.md) for the exact tool-vs-developer responsibility split.
+
+**Ongoing monitoring:**
+- `aya-index health` runs weekly in CI. It checks contract liveness, ABI validity, TVL, exploits, and proxy upgrades. YELLOW/RED warnings require developer triage.
+
+Every new protocol requires an **ADR** documenting the decision. See [AYA_INDEX_SPEC.md](AYA_INDEX_SPEC.md) for the full specification: criteria (Section 9), process (Section 10), tool vs developer roles (Section 11), and the bootstrap set of 24 protocols (Section 8).
+
 ---
 
 ## Summary
@@ -225,3 +245,4 @@ chore/upgrade-netty
 | ADRs | Large changes get a decision record |
 | No bugfix without tests | Reproduce → fix → regression test |
 | Branch naming | `category/description` (feat/, fix/, refactor/, docs/, test/, chore/) |
+| Protocol addition | Audited, $10M+ TVL, verified, no exploits, ADR required |

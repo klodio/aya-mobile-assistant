@@ -124,12 +124,12 @@ cache:
   newsTtlSeconds: 300
   tokenInfoTtlSeconds: 3600
   abiLruCapacity: 10000
+  abiTtlSeconds: 86400
 
 # --- HTTP Client ---
 httpClient:
   connectionPoolPerHost: 10
   keepAlive: true
-  abiTtlSeconds: 86400
 
 # --- Logging ---
 logging:

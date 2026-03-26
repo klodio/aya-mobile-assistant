@@ -5,7 +5,7 @@ Feature: Asset Disambiguation
   So that I never accidentally buy or interact with the wrong token
 
   # References: SPEC Section 4.1 (LLM as Orchestrator), Section 9.4 (LLM-Driven Conversation Flow)
-  # B&E Section 2.8 (Disambiguation), Section 3.4 (Wrong Asset Purchases)
+  # B&E Section 2.9 (Disambiguation), Section 3.4 (Wrong Asset Purchases)
   # NOTE: Disambiguation is handled by the LLM through natural conversation,
   # not through a special DisambiguationRequest message type or state machine.
 

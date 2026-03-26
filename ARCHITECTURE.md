@@ -87,12 +87,12 @@ C4Container
 
     Container_Boundary(backend, "Aya Backend (Fat JAR)") {
         Container(api, "API Layer", "Java / HTTP", "SBE codec, auth, rate limiter, request routing")
-        Container(agent, "Agent Pipeline", "Java", "Intent classification, model routing, tool dispatch, response assembly")
+        Container(agent, "Agent Pipeline", "Java", "LLM orchestration, model routing, tool dispatch, response assembly")
         Container(tools, "Tool Layer", "Java", "Market data, portfolio, news, settings, strategy tools")
         Container(txbuild, "Transaction Builder", "Java", "Protocol index, ABI/IDL registries, protocol adapters, yield discovery, tx construction pipeline")
         Container(exchange, "Aya Trade Client", "Java", "Exchange API integration, priority routing")
         Container(security, "Security Module", "Java", "Signature verification, input sanitization, prompt injection defense")
-        ContainerDb(sqlite, "SQLite", "Embedded DB", "ABI/IDL cache, conversation history, token registry")
+        ContainerDb(sqlite, "SQLite", "Embedded DB", "Protocol index, ABI/IDL cache, conversation history, token registry")
     }
 
     System_Ext(redis, "Redis", "Session state, rate limiting, pub/sub")
@@ -243,19 +243,24 @@ graph LR
     PROTO[aya-protocol] --> SERVER[aya-server]
     PROTO --> AGENT[aya-agent]
     PROTO --> TXBUILD[aya-txbuilder]
+    PROTO --> CLI[aya-cli]
     SECURITY[aya-security] --> SERVER
     AGENT --> SERVER
     TOOLS[aya-tools] --> AGENT
     TXBUILD --> AGENT
     EXCHANGE[aya-exchange] --> AGENT
     EXCHANGE --> TXBUILD
-    BDD[aya-bdd] -.-> SERVER
+    INDEX[aya-index] -.-> TXBUILD
+    CLI --> BDD[aya-bdd]
+    BDD -.-> SERVER
     BDD -.-> AGENT
     BDD -.-> TOOLS
     BDD -.-> TXBUILD
 ```
 
-*Solid arrows = compile dependency. Dashed arrows = test dependency.*
+*Solid arrows = compile dependency. Dashed arrows = test or offline dependency.*
+
+**`aya-cli`** (test client) and **`aya-index`** (seed data tool) are **separate modules with separate JARs**. `aya-cli` communicates with the backend over HTTP+SBE for testing. `aya-index` fetches ABIs/IDLs/metadata from external sources to populate the protocol index seed data — it runs offline and never talks to the backend.
 
 ### Module Details
 
@@ -329,14 +334,36 @@ graph LR
 | **Dependencies** | None |
 | **External** | SQLite (blacklist table) |
 
+#### aya-index
+
+| Aspect | Detail |
+|--------|--------|
+| **Purpose** | Offline tool for bootstrapping, auditing, and monitoring the protocol index |
+| **Responsibilities** | **Seed management**: Fetch ABIs from block explorers, IDLs from Solana, TVL/APY from DeFiLlama. Write seed YAML and ABI/IDL files. Validate completeness. **Audit**: Automated due diligence for new protocol proposals (TVL, audits, exploits, activity). **Health monitor**: Ongoing checks for contract liveness, ABI validity, TVL decline, exploit detection, proxy upgrades. |
+| **Key Interfaces** | `AbiFetcher`, `IdlFetcher`, `DefiLlamaFetcher`, `SeedWriter`, `SeedValidator`, `ProtocolAuditor`, `HealthChecker` |
+| **Commands** | `refresh`, `add`, `validate`, `list`, `audit`, `health` |
+| **Dependencies** | None (standalone — reads/writes seed files, calls external APIs) |
+| **External** | Block explorer APIs, DeFiLlama API (protocol data + hacks endpoint + yields), Solana RPC, GitHub API (activity check), rekt.news |
+| **Runs** | Offline only — developer machine or CI. `audit` and `health` can run as CI cron jobs. Never runs at runtime. |
+
+#### aya-cli
+
+| Aspect | Detail |
+|--------|--------|
+| **Purpose** | CLI test client for manual and automated testing |
+| **Responsibilities** | Interactive REPL for developers. Script mode for batch testing. TestHarness Java API for BDD step definitions. SBE encoding/decoding, request signing, portfolio simulation, response rendering. |
+| **Key Interfaces** | `AyaHttpClient`, `AyaWsClient`, `TestHarness`, `ReplEngine`, `ScriptRunner` |
+| **Dependencies** | `aya-protocol` (SBE codecs) |
+| **External** | Aya Backend (via HTTP+SBE) |
+
 #### aya-bdd
 
 | Aspect | Detail |
 |--------|--------|
 | **Purpose** | Cucumber BDD test infrastructure |
-| **Responsibilities** | Step definitions for all 15 feature files. Test fixtures and helpers. WireMock stubs for external services. Integration test configuration. |
+| **Responsibilities** | Step definitions for all feature files. Test fixtures and helpers. WireMock stubs for external services. Integration test configuration. |
 | **Key Artifacts** | `features/*.feature`, step definition classes |
-| **Dependencies** | All modules (test scope) |
+| **Dependencies** | `aya-cli` (TestHarness), all backend modules (test scope) |
 
 ---
 

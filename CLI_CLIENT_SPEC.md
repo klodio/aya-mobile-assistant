@@ -708,7 +708,7 @@ Or with Gradle's test fixtures:
 
 ### 12.4 All BDD Tests Through HTTP
 
-The existing 15 Gherkin feature files in `aya-bdd/` use the `TestHarness` for their step definitions. This means **all BDD scenarios go through real HTTP to a running backend** — maximum reliability and coverage.
+The existing 18 backend Gherkin feature files in `aya-bdd/` use the `TestHarness` for their step definitions. This means **all BDD scenarios go through real HTTP to a running backend** — maximum reliability and coverage.
 
 ```
 Feature files (features/*.feature)
@@ -803,7 +803,7 @@ Require a running backend:
 
 ### 14.3 BDD Integration Tests
 
-The existing 15 feature files use `TestHarness` step definitions that go through HTTP. When running `./gradlew cucumber`, every scenario hits the real backend over HTTP. This is the primary integration test mechanism.
+The backend feature files use `TestHarness` step definitions that go through HTTP. When running `./gradlew cucumber`, every scenario hits the real backend over HTTP. This is the primary integration test mechanism.
 
 ### 14.4 Property-Based Tests (`@property`)
 
@@ -823,6 +823,12 @@ java -jar aya-cli/build/libs/aya-cli.jar
 # Or via Gradle run
 ./gradlew :aya-cli:run --args="--url http://localhost:8080"
 ```
+
+---
+
+---
+
+> **Note:** Protocol index tooling (`aya-index`) is a **separate module** with its own JAR. It is not part of `aya-cli`. See [AYA_INDEX_SPEC.md](AYA_INDEX_SPEC.md) for the full `aya-index` specification.
 
 ---
 

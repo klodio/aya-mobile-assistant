@@ -107,10 +107,10 @@ The backend does **not**:
   |  +----------------+   |  +--------------+   |  +-----------------+   |
   |  |  API Layer     |   |  | Agent        |   |  | Transaction     |   |
   |  |  - HTTP server |   |  | Pipeline     |   |  | Builder         |   |
-  |  |  - SBE codec   |   |  | - Classify   |   |  | - ABI Registry  |   |
-  |  |  - Auth        |   |  | - Route      |   |  | - IDL Registry  |   |
-  |  |  - Rate limit  |   |  | - Execute    |   |  | - Protocol      |   |
-  |  +----------------+   |  | - Assemble   |   |  |   Adapters      |   |
+  |  |  - SBE codec   |   |  | - LLM call   |   |  | - Protocol      |   |
+  |  |  - Auth        |   |  | - Tool exec  |   |  |   Index         |   |
+  |  |  - Rate limit  |   |  | - Encode     |   |  | - Protocol      |   |
+  |  +----------------+   |  | - Sessions   |   |  |   Adapters      |   |
   |                        |  +--------------+   |  | - Tx Pipeline   |   |
   |  +----------------+   |                     |  +-----------------+   |
   |  |  Tool Layer    |   |  +--------------+   |                        |
@@ -142,7 +142,9 @@ The backend does **not**:
 | `aya-txbuilder` | ABI/IDL registries, protocol adapters, transaction construction pipeline | Chain RPCs, `aya-protocol` |
 | `aya-exchange` | Aya Trade exchange API client and integration logic | Aya Trade API |
 | `aya-security` | Authentication (public key signature verification), input sanitization, prompt injection defense | — |
-| `aya-bdd` | Cucumber BDD feature files and step definitions | All modules (test scope) |
+| `aya-index` | Offline seed data tooling: fetch ABIs/IDLs, metadata, validate protocol index | Block explorer APIs, DeFiLlama, Solana RPC |
+| `aya-cli` | CLI test client: REPL, script mode, integration test harness | `aya-protocol` |
+| `aya-bdd` | Cucumber BDD feature files and step definitions | `aya-cli` (test scope) |
 
 ### 2.3 Request Lifecycle
 
@@ -1194,7 +1196,7 @@ No background daemon. No scouting pipeline. Instead:
 
 1. **Bundled seed data**: The fat JAR ships with a pre-populated SQLite seed containing ABIs, IDLs, contract addresses, and protocol metadata for the top ~500 DeFi contracts across all supported chains. This covers all protocol adapters and the most common user interactions.
 2. **On-demand fetch**: When the LLM requests interaction with a contract not in the index, fetch the ABI from the chain's block explorer API in real-time, cache it, and proceed.
-3. **Periodic refresh**: A CLI command (`aya-cli index refresh`) or a scheduled CI job (weekly, not a running daemon) updates the bundled seed data. Developers run this before cutting a release.
+3. **Periodic refresh**: A CLI command (`aya-index refresh`) or a scheduled CI job (weekly, not a running daemon) updates the bundled seed data. Developers run this before cutting a release.
 
 This matches the project philosophy: simple, no heavy infrastructure, no running daemons.
 
@@ -1348,40 +1350,38 @@ These tools allow the LLM to orchestrate complex multi-step operations:
 1. LLM calls `get_best_yield(asset="ETH")`
 2. LLM presents: "Here are the best yield options for ETH: 1) Lido staking on Ethereum — 3.2% APY (low risk), 2) Aave V3 supply on Arbitrum — 2.9% APY (low risk)... Would you like to stake with any of these?"
 
-### 7.5 Seed Data Management
+### 7.5 Seed Data & Protocol Index Management
 
-The bundled seed data lives in the repo and is loaded into SQLite on first run:
+The protocol index seed data (ABIs, IDLs, protocol metadata, contract addresses) is managed by the **`aya-index`** tool — a separate module with its own JAR. See [AYA_INDEX_SPEC.md](AYA_INDEX_SPEC.md) for the full specification covering:
+
+- **Commands**: `refresh`, `add`, `validate`, `list`, `audit`, `health`
+- **Bootstrap protocol set**: 24 protocols shipping on day one (Section 8)
+- **Protocol addition criteria**: Audit, TVL, verified source, no exploits, maturity (Section 9)
+- **Protocol addition process**: Automated audit → ADR → seed data → adapter implementation → tests (Section 10)
+- **Tool vs developer responsibilities**: `aya-index` handles data fetching and verification; the developer handles judgment and implementation (Section 11)
+- **Protocol health monitoring**: Ongoing checks for contract liveness, ABI validity, TVL, exploits, proxy upgrades (Section 7)
+
+The seed data files live in the repo at:
 
 ```
 aya-txbuilder/src/main/resources/seed/
   protocol_registry.yml       # All protocol metadata
   protocol_contracts.yml      # All contract addresses
-  abis/                       # Bundled ABI JSON files
-    ethereum/
-      0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45.json  # Uniswap SwapRouter02
-      0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2.json  # Aave V3 Pool
-      ...
-    polygon/
-      ...
-    arbitrum/
-      ...
-  idls/                       # Bundled Solana IDLs
-    JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4.json  # Jupiter
-    MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD.json  # Marinade
-    ...
+  abis/{chain}/{address}.json # Bundled ABI JSON files
+  idls/{programAddress}.json  # Bundled Solana IDLs
 ```
 
-**Refresh process** (developer or CI, not runtime):
-```bash
-# Fetches latest ABIs, IDLs, APYs, TVLs and updates seed files
-aya-cli index refresh --output aya-txbuilder/src/main/resources/seed/
+#### Runtime Seed Loading
 
-# Then commit the updated seed and cut a release
-```
+On first startup, the backend loads the seed files from the JAR's classpath into SQLite:
+1. Parse `protocol_registry.yml` → insert into `protocol_registry` table
+2. Parse `protocol_contracts.yml` → insert into `protocol_contracts` table
+3. Load each ABI JSON from `seed/abis/` → insert into `abi_registry` table with source `bundled`
+4. Load each IDL JSON from `seed/idls/` → insert into `idl_registry` table with source `bundled`
+
+If the SQLite database already exists and has data, the seed is only applied for protocols that are missing (additive, no overwrite). This allows on-demand ABI fetches to persist across restarts without being clobbered.
 
 APY and TVL data in the seed is a snapshot. At runtime, the `get_best_yield` and `search_protocols` tools fetch live APY/TVL from DeFiLlama to augment the seed data — the seed provides the protocol structure, live APIs provide current numbers.
-
-Same caching strategy as ABIs: in-memory LRU + SQLite + on-demand fetch.
 
 ### 7.6 Bitcoin Transaction Construction (PSBT)
 
@@ -1486,6 +1486,15 @@ Each Solana adapter:
 3. Provide contract/program addresses per chain
 4. ABIs/IDLs will be fetched automatically by the registries
 5. Write tests: unit (parameter resolution, calldata encoding), integration (testnet simulation)
+
+#### 7.7.5 Bootstrap Set, Addition Criteria, and Process
+
+The bootstrap protocol set (24 protocols), addition criteria, addition process, and tool-vs-developer responsibility split are defined in [AYA_INDEX_SPEC.md](AYA_INDEX_SPEC.md) — the authoritative spec for protocol index management. Key sections:
+
+- **Bootstrap set** (AYA_INDEX_SPEC.md Section 8): 24 protocols across DEX, lending, staking, yield, bridge categories on all supported chains
+- **Addition criteria** (Section 9): Audited, $10M+ TVL, verified source, no exploits, active, 3+ months mainnet
+- **Addition process** (Section 10): `aya-index audit` → ADR → `aya-index add` → developer writes `ProtocolAdapter` + tests → PR review
+- **Tool vs developer** (Section 11): `aya-index` handles data fetching and verification; the developer handles judgment and implementation
 
 ### 7.8 Transaction Construction Pipeline
 
@@ -1967,7 +1976,7 @@ public interface AyaTradeClient {
 }
 ```
 
-### 12.3 Priority Venue Routing
+### 12.4 Priority Venue Routing
 
 **Rule**: Whenever a trade can be executed on Aya Trade, it MUST be the preferred venue.
 
@@ -1987,7 +1996,7 @@ Routing logic in the transaction builder:
 The response text should mention Aya Trade by name when it is the venue:
 > "I'll execute this trade on **Aya Trade** with an estimated fill price of..."
 
-### 12.4 Supported Instruments
+### 12.5 Supported Instruments
 
 | Type | Examples | Leverage | Venue |
 |------|---------|---------|-------|
@@ -1995,7 +2004,7 @@ The response text should mention Aya Trade by name when it is the venue:
 | Crypto Perps | BTC-PERP, ETH-PERP | Up to configurable max | Aya Trade only |
 | Commodities | XAU/USD (Gold), WTI/USD (Oil) | Configurable | Aya Trade only |
 
-### 12.5 Phased Integration Plan
+### 12.6 Phased Integration Plan
 
 - **Phase 1**: Aya Trade API not available. All trades route to on-chain DEXes. Responses mention "Aya Trade integration coming soon" when relevant.
 - **Phase 2**: Basic Aya Trade integration. Spot trading via Aya Trade for listed pairs. Market data from Aya Trade where available.
@@ -2168,6 +2177,7 @@ Layered caching to minimize external calls:
 | `@adversarial` | Adversarial | Prompt injection, malformed input | `./gradlew testAdversarial` | No |
 | `@performance` | Performance | JMH benchmarks, latency measurement | `./gradlew testPerformance` | No |
 | `@bdd` | BDD | Cucumber feature files | `./gradlew cucumber` | No |
+| `@monitor` | Protocol Health | Indexed protocol liveness, ABI validity, TVL, exploits | `./gradlew protocolHealth` | No (CI cron weekly) |
 
 - **Default** (`./gradlew test`): Runs `@fast` and `@property` tests only. Fast feedback loop for development.
 - **Full** (`./gradlew testFull`): Runs all categories. Used for pre-merge and release validation.
@@ -2237,7 +2247,7 @@ Using **JMH** for benchmarking:
 ### 16.7 BDD Tests (`@bdd`)
 
 Cucumber feature files (see `features/` directory):
-- 15 feature files covering all functional areas
+- 24 feature files covering all functional areas
 - Tagged with `@phase1`, `@phase2`, `@phase3` for phase-specific execution
 - Step definitions in `aya-bdd/src/test/java/`
 - Can run subset: `./gradlew cucumber -Dcucumber.filter.tags="@phase1"` for fast BDD

@@ -164,7 +164,7 @@ This document defines the behavioral contract for the Aya CLI Test Client (`aya-
 #### B-2.7.1: Profile Loading
 
 **Trigger**: `--portfolio whale` or `/portfolio whale`.
-**Expected**: The whale portfolio profile is loaded from JSON and used in all subsequent requests.
+**Expected**: The whale portfolio profile is loaded from YAML and used in all subsequent requests.
 **Rationale**: Different test scenarios need different portfolio states.
 
 #### B-2.7.2: Dynamic Balance Override
@@ -231,9 +231,9 @@ This document defines the behavioral contract for the Aya CLI Test Client (`aya-
 **Trigger**: Backend takes longer than `--timeout` seconds.
 **Expected**: CLI shows a timeout error. Does not hang indefinitely.
 
-### 4.5 Invalid Portfolio JSON
+### 4.5 Invalid Portfolio YAML
 
-**Trigger**: Malformed portfolio profile JSON.
+**Trigger**: Malformed portfolio profile YAML.
 **Expected**: Clear error message pointing to the JSON parsing issue. CLI does not crash.
 
 ---

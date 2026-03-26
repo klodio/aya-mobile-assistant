@@ -209,3 +209,13 @@ Feature: Market Data Queries
     When the user wants to swap ETH for USDC
     Then the LLM calls check_aya_trade with baseAsset ETH and quoteAsset USDC
     And the response includes whether the pair is available on Aya Trade
+
+  # --- Portfolio Viewing ---
+
+  @phase1 @fast
+  Scenario: Portfolio viewing
+    Given the user has a portfolio with ETH on Ethereum, USDC on Polygon, and SOL on Solana
+    When the user asks "Show my portfolio"
+    Then Aya displays a breakdown by asset, chain, and USD value
+    And shows allocation percentages
+    And shows total portfolio value
